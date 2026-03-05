@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.log
+*.jsonl
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+*.swp
+
+# Runtime temp (agent 运行时临时目录由环境变量指定，不纳入版本控制)
+.kuroneko_tmp/

@@ -1,0 +1,31 @@
+---
+description: 涉及接口/协议开发时，必须先生成协议文档
+alwaysApply: true
+---
+
+# 协议文档先行
+
+凡涉及以下情形时，**必须先生成确定的协议文档**，再开始编码：
+
+- 两个模块之间新增接口（如 I/O 端点接口、记忆接口、工具接口）
+- 跨进程通信协议（如 input/output 文件格式、run_agent 的调用契约）
+- 外部系统对接（如 Mem0、pi-mono 工具注册）
+- 任何「一方写、另一方读」的数据格式
+
+## 协议文档要包含
+
+1. **名称与版本**：协议名、版本号。
+2. **参与方**：生产者 / 消费者角色及约束（单生产者-单消费者还是其他）。
+3. **数据格式**：字段名、类型、编码（如 UTF-8）、示例。
+4. **语义约定**：消费后的行为（如 truncate / ack / dequeue）、写入语义（覆盖 / 追加）。
+5. **错误行为**：格式非法、超时、空内容时的约定。
+
+## 协议文档位置
+
+放在 `doc/protocols/<协议名>.md`，写完后在实现前 review 一遍。
+
+## 示例
+
+- `doc/protocols/io-endpoint.md`：input/output 文件端点协议
+- `doc/protocols/run-agent-contract.md`：run_agent exec 调用契约
+- `doc/protocols/memory-interface.md`：记忆接口协议

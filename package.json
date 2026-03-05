@@ -1,0 +1,38 @@
+{
+  "name": "openkuroneko",
+  "version": "0.1.0",
+  "description": "Lightweight multi-agent AI system with file I/O interface, SCL/ReCAP loop, and Mem0 memory",
+  "type": "module",
+  "main": "dist/cli/index.js",
+  "bin": {
+    "kuroneko": "dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli/index.ts",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run"
+  },
+  "keywords": ["agent", "ai", "scl", "recap", "mem0"],
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^12.0.0",
+    "mem0ai": "^0.1.0",
+    "chokidar": "^4.0.0",
+    "node-cron": "^3.0.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/node-cron": "^3.0.0",
+    "typescript": "^5.4.0",
+    "tsx": "^4.0.0",
+    "vitest": "^1.5.0",
+    "eslint": "^9.0.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

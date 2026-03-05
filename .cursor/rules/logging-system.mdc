@@ -1,0 +1,45 @@
+---
+description: 独立日志系统规范，保证运行行为可通过日志复盘
+alwaysApply: true
+---
+
+# 日志系统规范
+
+项目有独立日志模块（`M11. Logger`），所有模块统一通过该模块写日志。**任何模块不得直接 console.log/print 替代结构化日志。**
+
+## 日志模块职责
+
+- 提供结构化日志（JSON 行）：`{ ts, level, module, agentId, event, data }`
+- 日志写入临时目录：`<全局临时目录>/<agent_id>/logs/YYYY-MM-DD.jsonl`（追加）
+- 支持级别：`debug | info | warn | error`
+- 保证日志**不丢失**：即使 Agent 崩溃，已写入的行也已落盘
+
+## 必须记录的事件
+
+| 事件 | 级别 | 说明 |
+|------|------|------|
+| 每轮 R-CCAM 开始/结束 | info | 包含轮次、模式、userMessage 摘要 |
+| 工具调用（名称、参数、结果摘要） | info | A 阶段每次工具调用 |
+| Memory 读写（TASKS 更新、Daily Log append） | debug | M 阶段 |
+| Input 读取 / Output 写入 | info | 含端点 id、内容摘要 |
+| 能力缺口标记 / 自举触发 | warn | 含缺口类型 |
+| 错误（工具失败、LLM 不可用、崩溃） | error | 含堆栈或错误信息 |
+| Soul 热载 | info | 文件变更时间 |
+| 路径锁获取/释放 | info | |
+| 子 Agent 启动/退出（run_agent） | info | 含路径、exit code |
+
+## 使用示例
+
+```ts
+// ✅ 正确：通过 Logger 模块
+logger.info('io', { event: 'input.read', endpointId: 'default', preview: msg.slice(0, 80) });
+logger.error('tool', { event: 'shell_exec.failed', cmd, error: e.message });
+
+// ❌ 错误：直接打印
+console.log('input:', msg);
+```
+
+## 日志可复盘要求
+
+- 通过日志文件能还原：**哪轮发生了什么（R/C/A/M 各阶段）、工具调用了什么、输入输出是什么、错误在哪里**。
+- 日志文件按日滚动，保留至少 7 天（可配置）。
