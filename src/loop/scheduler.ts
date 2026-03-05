@@ -5,9 +5,9 @@ export function createLoopScheduler(opts: LoopOptions): LoopScheduler {
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   return {
-    start(tick: TickFn): void {
+    async start(tick: TickFn): Promise<void> {
       if (opts.mode === 'once') {
-        tick().catch(console.error);
+        await tick().catch(console.error);
         return;
       }
 

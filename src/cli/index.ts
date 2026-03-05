@@ -136,18 +136,17 @@ async function main() {
     intervalMs: config.intervalMs ?? Number(opts.intervalMs),
   });
 
-  scheduler.start(async (): Promise<boolean> => {
+  await scheduler.start(async (): Promise<boolean> => {
     const result = await runner.run();
     return result.hadWork;
   });
 
-  // once mode: wait for the single tick to finish then clean up
+  // once mode: start() already awaited the tick
   if (loopMode === 'once') {
-    // scheduler already called tick() synchronously; give it a moment to settle
-    await new Promise<void>((resolve) => setImmediate(resolve));
     soulWatcher.stop();
     releasePathLock(identity);
     logger.info('cli', { event: 'agent.exit', data: { mode: 'once' } });
+    process.exit(0);
   }
 }
 

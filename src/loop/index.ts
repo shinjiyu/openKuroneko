@@ -21,7 +21,8 @@ export interface LoopOptions {
 export type TickFn = () => Promise<boolean>;
 
 export interface LoopScheduler {
-  start(tick: TickFn): void;
+  /** once 模式返回 tick 完成的 Promise；其他模式立即 resolve */
+  start(tick: TickFn): Promise<void>;
   stop(): void;
 }
 

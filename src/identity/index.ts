@@ -15,4 +15,4 @@ export interface AgentIdentity {
   workDir: string;      // 工作目录（agent 的操作对象）
 }
 
-export { resolveIdentity, acquirePathLock, releasePathLock } from './identity.js';
+export { resolveIdentity, deriveAgentId, globalTmpDir, acquirePathLock, releasePathLock } from './identity.js';
