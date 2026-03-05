@@ -28,11 +28,15 @@ function resolveEngine(override?: unknown): Engine {
 
 export const webSearchTool: Tool = {
   name: 'web_search',
-  description:
-    'Search the web or fetch a URL. ' +
-    'action="search" + query: search DuckDuckGo (returns title/url/snippet list). ' +
-    'action="fetch" + url: fetch page as plain text. ' +
-    'engine="curl"|"playwright" (default curl).',
+  description: 'Search the web or fetch a URL.',
+  parameters: {
+    action:      { type: 'string', description: '"search" to query DuckDuckGo, "fetch" to retrieve a URL as plain text', enum: ['search', 'fetch'] },
+    query:       { type: 'string', description: 'Search query (required when action="search")' },
+    url:         { type: 'string', description: 'URL to fetch (required when action="fetch")' },
+    engine:      { type: 'string', description: '"curl" (default) or "playwright"', enum: ['curl', 'playwright'] },
+    max_results: { type: 'number', description: 'Max results to return (default 5, max 10)' },
+  },
+  required: ['action'],
 
   async call(args): Promise<{ ok: boolean; output: string }> {
     const action     = String(args['action'] ?? 'search');

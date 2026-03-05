@@ -1,9 +1,32 @@
+import fs from 'fs';
+import path from 'path';
 import type { Message, LLMResult } from '../adapter/index.js';
 import type { RunnerContext, RunnerDeps } from './index.js';
 import { readPendingGaps } from '../tools/definitions/capability-gap.js';
 import type { CapabilityGapRecord } from '../tools/definitions/capability-gap.js';
 
-const MAX_TOOL_ROUNDS = 10; // 防止工具调用死循环
+const MAX_TOOL_ROUNDS = 10;
+
+// ── Context-window management ─────────────────────────────────────────────────
+/**
+ * Token budget for chat history. Conservative: leaves ~4k for system prompt,
+ * tools schema, and model response within a typical 16k context window.
+ * Increase if using a model with a larger context (e.g. 32k / 128k).
+ */
+const CONTEXT_HISTORY_TOKEN_LIMIT = 8000;
+
+/**
+ * Fraction of the token budget at which proactive compression is triggered.
+ * Compression runs *before* the window is full so the LLM always has
+ * breathing room and compression itself doesn't overflow the context.
+ */
+const COMPRESS_THRESHOLD = 0.75; // compress at 75% full
+
+/**
+ * Number of oldest messages taken per compression pass.
+ * Must be even to keep user/assistant pairs intact.
+ */
+const COMPRESS_CHUNK_SIZE = 10;
 
 export interface RunResult {
   /** true = 本轮有实际 input 或工具调用；false = 纯空转 */
@@ -18,15 +41,27 @@ export function createRunner(ctx: RunnerContext, deps: RunnerDeps): Runner {
   const { agentId, workDir } = ctx;
   const { llm, ioRegistry, toolRegistry, memory, mem0, logger } = deps;
 
+  // In-memory conversation history — persists across ticks within this session
+  const chatHistory: Message[] = [];
+
+  // Tracks context archive files written to workDir during this session
+  const contextArchives: string[] = [];
+
   return {
     async run(): Promise<RunResult> {
       const round = Date.now();
 
       // ── R: Retrieval ─────────────────────────────────────────────────
       const rawInput    = await safeReadInput(ioRegistry, logger);
-      const dailyLog    = memory.readDailyLog();
       const tasks       = memory.readTasks();
       const pendingGaps = readPendingGaps(ctx.tempDir);
+
+      // Fast-path idle guard: nothing to do → skip LLM entirely, let scheduler back off
+      if (!rawInput && !tasks.trim() && pendingGaps.length === 0) {
+        return { hadWork: false };
+      }
+
+      const dailyLog    = memory.readDailyLog();
       const mem0Results = rawInput
         ? await safeMem0Search(mem0, rawInput, agentId, logger)
         : [];
@@ -35,15 +70,34 @@ export function createRunner(ctx: RunnerContext, deps: RunnerDeps): Runner {
 
       logger.info('runner', {
         event: 'rcam.start',
-        data: { round, hasInput: !!rawInput, mem0Hits: mem0Results.length, pendingGaps: pendingGaps.length },
+        data: { round, hasInput: !!rawInput, mem0Hits: mem0Results.length, pendingGaps: pendingGaps.length, historyLen: chatHistory.length },
       });
 
       // ── C: Cognition — build system prompt (ReCAP context) ───────────
-      const systemPrompt = buildSystemPrompt(soul, workDir, dailyLog, tasks, mem0Results, pendingGaps);
+      const systemPrompt = buildSystemPrompt(soul, workDir, dailyLog, tasks, mem0Results, pendingGaps, contextArchives);
 
-      const messages: Message[] = rawInput
-        ? [{ role: 'user', content: rawInput }]
-        : [{ role: 'user', content: SCL_CONTROL_PROMPT }];
+      // Append new user message to history, then pass full history to LLM
+      let messages: Message[];
+      if (rawInput) {
+        chatHistory.push({ role: 'user', content: `<master_message>\n${rawInput}\n</master_message>` });
+
+        // Proactive compression: run *before* the context is full so the
+        // compressor LLM call itself has enough headroom.
+        const historyTokens = estimateTokens(chatHistory);
+        if (historyTokens >= CONTEXT_HISTORY_TOKEN_LIMIT * COMPRESS_THRESHOLD) {
+          logger.info('runner', {
+            event: 'context.compress.trigger',
+            data: { historyTokens, threshold: Math.floor(CONTEXT_HISTORY_TOKEN_LIMIT * COMPRESS_THRESHOLD) },
+          });
+          const chunk = chatHistory.splice(0, COMPRESS_CHUNK_SIZE);
+          const archivePath = await compressAndArchive(chunk, workDir, llm, logger);
+          if (archivePath) contextArchives.push(archivePath);
+        }
+
+        messages = [...chatHistory];
+      } else {
+        messages = [{ role: 'user', content: SCL_CONTROL_PROMPT }];
+      }
 
       // ── A: Action — multi-round tool-call loop ───────────────────────
       let toolCallCount = 0;
@@ -58,7 +112,8 @@ export function createRunner(ctx: RunnerContext, deps: RunnerDeps): Runner {
           result = await llm.chat(systemPrompt, currentMessages, toolRegistry.schema());
         } catch (e) {
           logger.error('runner', { event: 'llm.error', data: { error: String(e) } });
-          await writeError(ioRegistry, String(e), logger);
+          // Only surface errors to master when there was actual user input
+          if (rawInput) await writeError(ioRegistry, String(e), logger);
           return { hadWork: !!rawInput };
         }
 
@@ -74,6 +129,8 @@ export function createRunner(ctx: RunnerContext, deps: RunnerDeps): Runner {
         const toolResultMessages: Message[] = [
           { role: 'assistant', content: lastContent },
         ];
+
+        let repliedToMaster = false;
 
         for (const tc of result.toolCalls) {
           toolCallCount++;
@@ -104,18 +161,61 @@ export function createRunner(ctx: RunnerContext, deps: RunnerDeps): Runner {
             role: 'tool',
             content: JSON.stringify({ ok: toolResult.ok, output: toolResult.output }),
           });
+
+          // reply_to_master ends the conversation turn — no further LLM rounds needed
+          if (tc.name === 'reply_to_master' && toolResult.ok) {
+            repliedToMaster = true;
+            // Record agent reply in chat history so next turn has full context
+            const agentReply = String(tc.args['message'] ?? '');
+            if (agentReply) {
+              chatHistory.push({ role: 'assistant', content: agentReply });
+            }
+          }
         }
 
         // Continue conversation with tool results
         currentMessages = [...currentMessages, ...toolResultMessages];
+
+        if (repliedToMaster) {
+          logger.info('runner', { event: 'llm.done', data: { contentLen: lastContent.length, reason: 'replied_to_master' } });
+          break;
+        }
+      }
+
+      // ── Fallback output: LLM replied directly without calling reply_to_master ──
+      // Some models return text content instead of using the tool. Pipe it out.
+      if (rawInput && lastContent && toolCallCount === 0) {
+        try {
+          const ep = ioRegistry.getOutput('default');
+          if (ep) {
+            await ep.write(lastContent);
+            logger.info('runner', { event: 'output.fallback', data: { len: lastContent.length } });
+          }
+        } catch (e) {
+          logger.warn('runner', { event: 'output.fallback.error', data: { error: String(e) } });
+        }
+        // Record fallback reply in history too
+        chatHistory.push({ role: 'assistant', content: lastContent });
       }
 
       // ── M: Memory ────────────────────────────────────────────────────
-      if (lastContent) {
-        memory.appendDailyLog(lastContent);
-        logger.debug('runner', { event: 'memory.dailyLog.append', data: { len: lastContent.length } });
+      // Record structured conversation entry (user + agent) for cross-turn context
+      const masterReplyContent = chatHistory.length > 0 && chatHistory[chatHistory.length - 1]?.role === 'assistant'
+        ? chatHistory[chatHistory.length - 1]!.content
+        : lastContent;
 
-        await safeMem0Add(mem0, lastContent, agentId, logger);
+      if (rawInput || masterReplyContent) {
+        const logEntry = [
+          rawInput       ? `[User] ${rawInput}` : null,
+          masterReplyContent ? `[Agent] ${masterReplyContent}` : null,
+        ].filter(Boolean).join('\n');
+
+        memory.appendDailyLog(logEntry);
+        logger.debug('runner', { event: 'memory.dailyLog.append', data: { len: logEntry.length } });
+
+        if (masterReplyContent) {
+          await safeMem0Add(mem0, logEntry, agentId, logger);
+        }
       }
 
       const hadWork = !!rawInput || toolCallCount > 0;
@@ -135,17 +235,91 @@ const SCL_CONTROL_PROMPT =
   '[SCL control prompt] No new input. Review your TASKS and Daily Log. ' +
   'Decide your next action: continue a task, self-reflect, or idle if nothing is pending.';
 
+/**
+ * Estimate token count for a message list.
+ * Heuristic: ~3 characters per token for Chinese/English mixed text.
+ */
+function estimateTokens(messages: Message[]): number {
+  return messages.reduce((sum, m) => sum + Math.ceil(m.content.length / 3), 0);
+}
+
+/**
+ * Compress a chunk of messages using the LLM, then write a single archive file
+ * containing both the LLM-generated summary (for quick recall) and the raw
+ * messages (for exact reference). Returns the relative filename or null.
+ *
+ * Falls back to raw-only archiving if the LLM call fails.
+ */
+async function compressAndArchive(
+  chunk: Message[],
+  workDir: string,
+  llm: RunnerDeps['llm'],
+  logger: RunnerDeps['logger'],
+): Promise<string | null> {
+  const SUMMARIZE_SYSTEM =
+    'You are a memory consolidation assistant. ' +
+    'Summarize the following conversation segment concisely, in the same language used by the participants. ' +
+    'Capture: key decisions, facts established, files created or modified, tasks completed, and any important context. ' +
+    'Output ONLY the summary text, no preamble or meta-commentary.';
+
+  const rawText = chunk
+    .map(m => `[${m.role}]\n${m.content}`)
+    .join('\n\n---\n\n');
+
+  let summary: string | null = null;
+  try {
+    const result = await llm.chat(
+      SUMMARIZE_SYSTEM,
+      [{ role: 'user', content: rawText }],
+      [], // no tools needed for summarization
+    );
+    summary = result.content?.trim() ?? null;
+    logger.info('runner', { event: 'context.compress.summary', data: { summaryLen: summary?.length ?? 0 } });
+  } catch (e) {
+    logger.warn('runner', { event: 'context.compress.llm.failed', data: { error: String(e) } });
+  }
+
+  try {
+    fs.mkdirSync(workDir, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const filename = `context-archive-${ts}.md`;
+    const absPath = path.join(workDir, filename);
+
+    const sections: string[] = [
+      `# Context Archive — ${new Date().toLocaleString()}`,
+      `**Messages compressed:** ${chunk.length}`,
+      '',
+      '## Summary',
+      summary ?? '*(summarization failed — see raw messages below)*',
+      '',
+      '## Raw Messages',
+      rawText,
+    ];
+    fs.writeFileSync(absPath, sections.join('\n'), 'utf8');
+    logger.info('runner', { event: 'context.archived', data: { file: filename, messages: chunk.length, hasSummary: !!summary } });
+    return filename;
+  } catch (e) {
+    logger.warn('runner', { event: 'context.archive.failed', data: { error: String(e) } });
+    return null;
+  }
+}
+
 function buildSystemPrompt(
   soul: string,
   workDir: string,
   dailyLog: string,
   tasks: string,
   mem0Results: string[],
-  pendingGaps: CapabilityGapRecord[]
+  pendingGaps: CapabilityGapRecord[],
+  contextArchives: string[]
 ): string {
   const sections: string[] = [];
   if (soul)                    sections.push(`## Soul\n${soul}`);
   sections.push(`## Working Directory\n${workDir}`);
+  if (contextArchives.length > 0) {
+    const refs = contextArchives.map(f => `- ${f}  →  use read_file to retrieve`).join('\n');
+    sections.push(`## Archived Context\nEarlier conversation has been archived. Use read_file on these files if you need historical context:\n${refs}`);
+  }
   if (dailyLog)                sections.push(`## Today's Log\n${dailyLog}`);
   if (tasks)                   sections.push(`## TASKS\n${tasks}`);
   if (mem0Results.length > 0)  sections.push(`## Relevant Memory\n${mem0Results.join('\n')}`);

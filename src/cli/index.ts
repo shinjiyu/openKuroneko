@@ -24,11 +24,10 @@ import { createLoopScheduler } from '../loop/index.js';
 import { createToolRegistry } from '../tools/index.js';
 import {
   readFileTool, writeFileTool, editFileTool, shellExecTool,
-  webSearchTool, getTimeTool, replyToUserTool, runAgentTool,
+  webSearchTool, getTimeTool, replyToMasterTool, runAgentTool,
   readWriteStateTool, capabilityGapTool, setCapabilityGapTempDir,
-  listAgentsTool, stopAgentTool,
+  listAgentsTool, stopAgentTool, setReplyWriter, seekContextTool,
 } from '../tools/definitions/index.js';
-import { setReplyWriter } from '../tools/definitions/reply-to-user.js';
 import { setStateAccessors } from '../tools/definitions/read-write-state.js';
 import { setWorkDirGuard } from '../tools/definitions/workdir-guard.js';
 
@@ -128,9 +127,9 @@ async function main() {
 
   const toolRegistry = createToolRegistry([
     readFileTool, writeFileTool, editFileTool, shellExecTool,
-    webSearchTool, getTimeTool, replyToUserTool, runAgentTool,
+    webSearchTool, getTimeTool, replyToMasterTool, runAgentTool,
     readWriteStateTool, capabilityGapTool,
-    listAgentsTool, stopAgentTool,
+    listAgentsTool, stopAgentTool, seekContextTool,
   ]);
 
   // M10 — LLM Adapter

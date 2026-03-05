@@ -17,9 +17,19 @@ export interface ToolResult {
   output: string;
 }
 
+export interface ToolParam {
+  type: string;
+  description: string;
+  enum?: string[];
+}
+
 export interface Tool {
   name: string;
   description: string;
+  /** Explicit parameter schema — improves tool-call compliance for all models. */
+  parameters?: Record<string, ToolParam>;
+  /** Parameter names that are required. */
+  required?: string[];
   call(args: Record<string, unknown>): Promise<ToolResult>;
 }
 

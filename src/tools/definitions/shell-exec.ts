@@ -11,11 +11,13 @@ import type { Tool } from '../index.js';
 
 export const shellExecTool: Tool = {
   name: 'shell_exec',
-  description:
-    'Execute a shell command within the agent workDir. ' +
-    'command (required): shell command to run. ' +
-    'cwd (optional): must be inside workDir (defaults to workDir). ' +
-    'timeout (optional): ms, default 30000.',
+  description: 'Execute a shell command within the agent workDir.',
+  parameters: {
+    command: { type: 'string', description: 'Shell command to run' },
+    cwd:     { type: 'string', description: 'Working directory, must be inside workDir (defaults to workDir)' },
+    timeout: { type: 'number', description: 'Timeout in milliseconds (default 30000)' },
+  },
+  required: ['command'],
 
   async call(args): Promise<{ ok: boolean; output: string }> {
     const cmd     = String(args['command'] ?? '').trim();

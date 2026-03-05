@@ -1,11 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { isPathAllowed, pathSecurityError } from './workdir-guard.js';
+import { isPathAllowed, pathSecurityError, getWorkDir } from './workdir-guard.js';
 import type { Tool } from '../index.js';
 
 export const editFileTool: Tool = {
   name: 'edit_file',
   description: 'Replace a specific string in a file with a new string (first occurrence).',
+  parameters: {
+    path:       { type: 'string', description: 'File path to edit' },
+    old_string: { type: 'string', description: 'Exact string to find and replace' },
+    new_string: { type: 'string', description: 'String to replace it with' },
+  },
+  required: ['path', 'old_string', 'new_string'],
   async call(args): Promise<{ ok: boolean; output: string }> {
     const filePath = String(args['path'] ?? '').trim();
     const oldStr   = String(args['old_string'] ?? '');
@@ -13,7 +19,7 @@ export const editFileTool: Tool = {
     if (!filePath || !oldStr) {
       return { ok: false, output: 'Missing required arguments: path, old_string' };
     }
-    const abs = path.resolve(filePath);
+    const abs = path.isAbsolute(filePath) ? filePath : path.join(getWorkDir(), filePath);
     if (!isPathAllowed(abs)) return { ok: false, output: pathSecurityError(abs) };
     try {
       const content = fs.readFileSync(abs, 'utf8');

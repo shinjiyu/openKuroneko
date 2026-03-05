@@ -81,11 +81,11 @@ node dist/cli/index.js --dir ./my-agent --loop interval --interval-ms 60000
 - [x] P0：Loop Scheduler（三种模式）
 - [x] P0：R-CCAM Runner 骨架
 - [x] P0：CLI 入口
-- [ ] P1：LLM 工具调用完整循环联调
-- [ ] P1：Memory L2 完整读写注入
-- [ ] P1：Mem0 对接
-- [ ] P2：web_search 接入真实搜索 API
-- [ ] P2：run_agent 子进程联调
+- [x] P1：LLM 工具调用完整循环联调
+- [x] P1：Memory L2 完整读写注入
+- [x] P1：Mem0 对接（REST 客户端，graceful degrade）
+- [x] P2：web_search 接入真实搜索 API（curl + playwright 双引擎，DuckDuckGo）
+- [x] P2：run_agent 子进程联调（once/background 两种模式）
 - [ ] P3：Chat 模块（暂不实现）
 
 ## License

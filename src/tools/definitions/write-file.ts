@@ -1,16 +1,21 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { isPathAllowed, pathSecurityError } from './workdir-guard.js';
+import { isPathAllowed, pathSecurityError, getWorkDir } from './workdir-guard.js';
 import type { Tool } from '../index.js';
 
 export const writeFileTool: Tool = {
   name: 'write_file',
   description: 'Write text content to a file in the working directory (overwrites).',
+  parameters: {
+    path:    { type: 'string', description: 'File path relative to workDir (e.g. "src/snake.js")' },
+    content: { type: 'string', description: 'Full text content to write into the file' },
+  },
+  required: ['path', 'content'],
   async call(args): Promise<{ ok: boolean; output: string }> {
     const filePath = String(args['path'] ?? '').trim();
     const content  = String(args['content'] ?? '');
     if (!filePath) return { ok: false, output: 'Missing required argument: path' };
-    const abs = path.resolve(filePath);
+    const abs = path.isAbsolute(filePath) ? filePath : path.join(getWorkDir(), filePath);
     if (!isPathAllowed(abs)) return { ok: false, output: pathSecurityError(abs) };
     try {
       fs.mkdirSync(path.dirname(abs), { recursive: true });

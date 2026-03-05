@@ -12,7 +12,12 @@ export function createToolRegistry(tools: Tool[]): ToolRegistry {
         function: {
           name: t.name,
           description: t.description,
-          parameters: { type: 'object', properties: {}, additionalProperties: true },
+          parameters: {
+            type: 'object',
+            properties: t.parameters ?? {},
+            required: t.required ?? [],
+            additionalProperties: !t.parameters,
+          },
         },
       }));
     },
