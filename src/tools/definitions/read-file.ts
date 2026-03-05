@@ -1,17 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { isPathAllowed, pathSecurityError } from './workdir-guard.js';
 import type { Tool } from '../index.js';
 
 export const readFileTool: Tool = {
   name: 'read_file',
-  description: 'Read a file from the working directory. Returns its text content.',
-  async call(args) {
-    const filePath = String(args['path'] ?? '');
+  description: 'Read a file from the working directory or agent temp directory. Returns its text content.',
+  async call(args): Promise<{ ok: boolean; output: string }> {
+    const filePath = String(args['path'] ?? '').trim();
     if (!filePath) return { ok: false, output: 'Missing required argument: path' };
+    const abs = path.resolve(filePath);
+    if (!isPathAllowed(abs)) return { ok: false, output: pathSecurityError(abs) };
     try {
-      const abs = path.resolve(filePath);
-      const content = fs.readFileSync(abs, 'utf8');
-      return { ok: true, output: content };
+      return { ok: true, output: fs.readFileSync(abs, 'utf8') };
     } catch (e) {
       return { ok: false, output: String(e) };
     }

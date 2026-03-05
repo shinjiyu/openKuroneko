@@ -9,6 +9,7 @@
 
 import { Command } from 'commander';
 import path from 'node:path';
+import fs from 'node:fs';
 
 import { resolveIdentity, acquirePathLock, releasePathLock } from '../identity/index.js';
 import { loadConfig, watchSoul } from '../config/index.js';
@@ -25,9 +26,11 @@ import {
   readFileTool, writeFileTool, editFileTool, shellExecTool,
   webSearchTool, getTimeTool, replyToUserTool, runAgentTool,
   readWriteStateTool, capabilityGapTool, setCapabilityGapTempDir,
+  listAgentsTool, stopAgentTool,
 } from '../tools/definitions/index.js';
 import { setReplyWriter } from '../tools/definitions/reply-to-user.js';
 import { setStateAccessors } from '../tools/definitions/read-write-state.js';
+import { setWorkDirGuard } from '../tools/definitions/workdir-guard.js';
 
 // ── CLI Definition ────────────────────────────────────────────────────────────
 
@@ -73,6 +76,19 @@ async function main() {
   });
 
   // M2 — Config & Soul (hot-reload)
+  // Persist agentPath into config so list_agents can display it
+  const configPath = path.join(identity.tempDir, 'agent.config.json');
+  if (!fs.existsSync(configPath)) {
+    fs.writeFileSync(configPath, JSON.stringify({ agentPath: identity.agentPath }, null, 2), 'utf8');
+  } else {
+    try {
+      const existing = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+      if (!existing['agentPath']) {
+        existing['agentPath'] = identity.agentPath;
+        fs.writeFileSync(configPath, JSON.stringify(existing, null, 2), 'utf8');
+      }
+    } catch { /* ignore */ }
+  }
   const config = loadConfig(identity.tempDir);
   const soulWatcher = watchSoul(identity.tempDir, (soul) => {
     runnerCtx.soul = soul;
@@ -99,6 +115,7 @@ async function main() {
   const mem0 = createMem0Client();
 
   // M8 — Tools
+  setWorkDirGuard(identity.workDir, identity.tempDir);
   setCapabilityGapTempDir(identity.tempDir);
   setReplyWriter(async (msg) => {
     await ioRegistry.getOutput('default')?.write(msg);
@@ -113,6 +130,7 @@ async function main() {
     readFileTool, writeFileTool, editFileTool, shellExecTool,
     webSearchTool, getTimeTool, replyToUserTool, runAgentTool,
     readWriteStateTool, capabilityGapTool,
+    listAgentsTool, stopAgentTool,
   ]);
 
   // M10 — LLM Adapter

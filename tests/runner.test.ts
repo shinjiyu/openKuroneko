@@ -12,6 +12,7 @@ import { createMemoryLayer2 } from '../src/memory/index.js';
 import { createToolRegistry } from '../src/tools/index.js';
 import { getTimeTool, writeFileTool } from '../src/tools/definitions/index.js';
 import { setStateAccessors } from '../src/tools/definitions/read-write-state.js';
+import { setWorkDirGuard } from '../src/tools/definitions/workdir-guard.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -20,6 +21,8 @@ let TMP: string;
 beforeEach(() => {
   TMP = path.join(os.tmpdir(), `kuroneko-runner-${Date.now()}`);
   fs.mkdirSync(TMP, { recursive: true });
+  // Allow tools to access TMP as workDir
+  setWorkDirGuard(TMP, TMP);
 });
 
 function makeMockLogger(): Logger {
