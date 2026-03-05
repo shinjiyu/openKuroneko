@@ -24,3 +24,4 @@ export interface RunnerDeps {
 }
 
 export { createRunner } from './runner.js';
+export type { RunResult, Runner } from './runner.js';

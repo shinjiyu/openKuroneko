@@ -22,44 +22,47 @@ export function createLoopScheduler(opts: LoopOptions): LoopScheduler {
         return;
       }
 
-      // fast mode with anti-idle backoff
+      // ── fast mode with anti-idle exponential backoff ──────────────
       const idleThreshold = opts.idleThreshold ?? 3;
-      const backoffBase = opts.backoffBaseMs ?? 500;
-      const maxBackoff = opts.maxBackoffMs ?? 30_000;
+      const backoffBase   = opts.backoffBaseMs ?? 500;
+      const maxBackoff    = opts.maxBackoffMs  ?? 30_000;
       let idleCount = 0;
 
       const loop = async () => {
         if (stopped) return;
-        const hadWork = await runTickWithWorkDetection(tick);
+
+        let hadWork = false;
+        try {
+          hadWork = await tick();
+        } catch {
+          hadWork = false;
+        }
+
+        if (stopped) return;
+
         if (hadWork) {
           idleCount = 0;
           setImmediate(loop);
         } else {
           idleCount++;
           if (idleCount >= idleThreshold) {
-            const delay = Math.min(backoffBase * 2 ** (idleCount - idleThreshold), maxBackoff);
-            timer = setTimeout(loop, delay);
+            const backoffMs = Math.min(backoffBase * 2 ** (idleCount - idleThreshold), maxBackoff);
+            timer = setTimeout(loop, backoffMs);
           } else {
             setImmediate(loop);
           }
         }
       };
+
       loop();
     },
 
     stop() {
       stopped = true;
-      if (timer) clearTimeout(timer);
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
     },
   };
-}
-
-async function runTickWithWorkDetection(tick: TickFn): Promise<boolean> {
-  // tick 有实际工作时返回 true（暂以是否抛错为判断依据，后续可扩展）
-  try {
-    await tick();
-    return true;
-  } catch {
-    return false;
-  }
 }

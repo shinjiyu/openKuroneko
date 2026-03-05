@@ -17,7 +17,8 @@ export interface LoopOptions {
   maxBackoffMs?: number;
 }
 
-export type TickFn = () => Promise<void>;
+/** 返回 true 表示本轮有实际工作（有 input 或工具调用），用于 fast 模式空转检测 */
+export type TickFn = () => Promise<boolean>;
 
 export interface LoopScheduler {
   start(tick: TickFn): void;
