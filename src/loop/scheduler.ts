@@ -18,7 +18,7 @@ export function createLoopScheduler(opts: LoopOptions): LoopScheduler {
           await tick().catch(console.error);
           if (!stopped) timer = setTimeout(loop, ms);
         };
-        loop();
+        void loop();
         return;
       }
 
@@ -54,7 +54,7 @@ export function createLoopScheduler(opts: LoopOptions): LoopScheduler {
         }
       };
 
-      loop();
+      void loop();
     },
 
     stop() {

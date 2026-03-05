@@ -24,7 +24,7 @@ import { createToolRegistry } from '../tools/index.js';
 import {
   readFileTool, writeFileTool, editFileTool, shellExecTool,
   webSearchTool, getTimeTool, replyToUserTool, runAgentTool,
-  readWriteStateTool, capabilityGapTool,
+  readWriteStateTool, capabilityGapTool, setCapabilityGapTempDir,
 } from '../tools/definitions/index.js';
 import { setReplyWriter } from '../tools/definitions/reply-to-user.js';
 import { setStateAccessors } from '../tools/definitions/read-write-state.js';
@@ -99,6 +99,7 @@ async function main() {
   const mem0 = createMem0Client();
 
   // M8 — Tools
+  setCapabilityGapTempDir(identity.tempDir);
   setReplyWriter(async (msg) => {
     await ioRegistry.getOutput('default')?.write(msg);
     logger.info('io', { event: 'output.write', data: { endpointId: 'default', preview: msg.slice(0, 80) } });
@@ -122,6 +123,7 @@ async function main() {
     agentId: identity.agentId,
     soul: soulWatcher.getSoul(),
     workDir: identity.workDir,
+    tempDir: identity.tempDir,
   };
 
   const runner = createRunner(runnerCtx, { llm, ioRegistry, toolRegistry, memory, mem0, logger });

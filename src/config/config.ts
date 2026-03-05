@@ -26,9 +26,8 @@ export function watchSoul(tempDir: string, onChange?: (soul: string) => void): S
     currentSoul = fs.existsSync(soulPath) ? fs.readFileSync(soulPath, 'utf8') : '';
     onChange?.(currentSoul);
   });
-
   return {
     getSoul: () => currentSoul,
-    stop: () => { watcher.close(); },
+    stop: () => { void watcher.close(); },
   };
 }

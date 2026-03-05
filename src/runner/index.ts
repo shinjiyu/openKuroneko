@@ -8,19 +8,27 @@
  *   M  — Memory（写 Daily Log + Mem0）
  */
 
+import type { LLMAdapter } from '../adapter/index.js';
+import type { IORegistry } from '../io/index.js';
+import type { ToolRegistry } from '../tools/index.js';
+import type { MemoryLayer2 } from '../memory/index.js';
+import type { Mem0Client } from '../mem0/index.js';
+import type { Logger } from '../logger/index.js';
+
 export interface RunnerContext {
   agentId: string;
   soul: string;
   workDir: string;
+  tempDir: string;
 }
 
 export interface RunnerDeps {
-  llm: import('../adapter/index.js').LLMAdapter;
-  ioRegistry: import('../io/index.js').IORegistry;
-  toolRegistry: import('../tools/index.js').ToolRegistry;
-  memory: import('../memory/index.js').MemoryLayer2;
-  mem0: import('../mem0/index.js').Mem0Client;
-  logger: import('../logger/index.js').Logger;
+  llm: LLMAdapter;
+  ioRegistry: IORegistry;
+  toolRegistry: ToolRegistry;
+  memory: MemoryLayer2;
+  mem0: Mem0Client;
+  logger: Logger;
 }
 
 export { createRunner } from './runner.js';

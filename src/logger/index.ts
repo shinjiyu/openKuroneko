@@ -24,3 +24,4 @@ export interface Logger {
 }
 
 export { createLogger } from './logger.js';
+export { pruneOldLogs } from './logger.js';

@@ -1,5 +1,7 @@
 import type { Message, LLMResult } from '../adapter/index.js';
 import type { RunnerContext, RunnerDeps } from './index.js';
+import { readPendingGaps } from '../tools/definitions/capability-gap.js';
+import type { CapabilityGapRecord } from '../tools/definitions/capability-gap.js';
 
 const MAX_TOOL_ROUNDS = 10; // 防止工具调用死循环
 
@@ -21,9 +23,10 @@ export function createRunner(ctx: RunnerContext, deps: RunnerDeps): Runner {
       const round = Date.now();
 
       // ── R: Retrieval ─────────────────────────────────────────────────
-      const rawInput = await safeReadInput(ioRegistry, logger);
-      const dailyLog  = memory.readDailyLog();
-      const tasks     = memory.readTasks();
+      const rawInput    = await safeReadInput(ioRegistry, logger);
+      const dailyLog    = memory.readDailyLog();
+      const tasks       = memory.readTasks();
+      const pendingGaps = readPendingGaps(ctx.tempDir);
       const mem0Results = rawInput
         ? await safeMem0Search(mem0, rawInput, agentId, logger)
         : [];
@@ -32,11 +35,11 @@ export function createRunner(ctx: RunnerContext, deps: RunnerDeps): Runner {
 
       logger.info('runner', {
         event: 'rcam.start',
-        data: { round, hasInput: !!rawInput, mem0Hits: mem0Results.length },
+        data: { round, hasInput: !!rawInput, mem0Hits: mem0Results.length, pendingGaps: pendingGaps.length },
       });
 
       // ── C: Cognition — build system prompt (ReCAP context) ───────────
-      const systemPrompt = buildSystemPrompt(soul, workDir, dailyLog, tasks, mem0Results);
+      const systemPrompt = buildSystemPrompt(soul, workDir, dailyLog, tasks, mem0Results, pendingGaps);
 
       const messages: Message[] = rawInput
         ? [{ role: 'user', content: rawInput }]
@@ -137,7 +140,8 @@ function buildSystemPrompt(
   workDir: string,
   dailyLog: string,
   tasks: string,
-  mem0Results: string[]
+  mem0Results: string[],
+  pendingGaps: CapabilityGapRecord[]
 ): string {
   const sections: string[] = [];
   if (soul)                    sections.push(`## Soul\n${soul}`);
@@ -145,6 +149,10 @@ function buildSystemPrompt(
   if (dailyLog)                sections.push(`## Today's Log\n${dailyLog}`);
   if (tasks)                   sections.push(`## TASKS\n${tasks}`);
   if (mem0Results.length > 0)  sections.push(`## Relevant Memory\n${mem0Results.join('\n')}`);
+  if (pendingGaps.length > 0) {
+    const gapLines = pendingGaps.map(g => `- [${g.ts}] ${g.gap}${g.reason ? ` (${g.reason})` : ''}`).join('\n');
+    sections.push(`## Pending Capability Gaps (self-bootstrap these)\n${gapLines}`);
+  }
   return sections.join('\n\n---\n\n');
 }
 

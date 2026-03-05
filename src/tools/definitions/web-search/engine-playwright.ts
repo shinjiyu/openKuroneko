@@ -9,17 +9,22 @@ import { formatResults, parseDDGResults, truncatePage } from './html-parser.js';
 
 const DDG_HTML_URL = 'https://html.duckduckgo.com/html/';
 
-async function withBrowser<T>(fn: (page: import('playwright').Page) => Promise<T>): Promise<T> {
-  let playwright;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyPage = any;
+
+async function withBrowser<T>(fn: (page: AnyPage) => Promise<T>): Promise<T> {
+  // Dynamic import so missing playwright doesn't crash at startup
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let pw: any;
   try {
-    playwright = await import('playwright');
+    pw = await import('playwright');
   } catch {
     throw new Error(
       'playwright not installed. Run: npx playwright install chromium'
     );
   }
 
-  const browser = await playwright.chromium.launch({ headless: true });
+  const browser = await pw.chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (compatible; openKuroneko/1.0)',
   });
@@ -32,19 +37,19 @@ async function withBrowser<T>(fn: (page: import('playwright').Page) => Promise<T
 }
 
 export async function playwrightSearch(query: string, maxResults: number): Promise<string> {
-  return withBrowser(async (page) => {
+  return withBrowser(async (page: AnyPage) => {
     const url = `${DDG_HTML_URL}?q=${encodeURIComponent(query)}&b=&kl=wt-wt`;
     await page.goto(url, { timeout: 20_000, waitUntil: 'domcontentloaded' });
-    const html = await page.content();
+    const html: string = await page.content();
     const results = parseDDGResults(html, maxResults);
     return formatResults(results);
   });
 }
 
 export async function playwrightFetch(url: string): Promise<string> {
-  return withBrowser(async (page) => {
+  return withBrowser(async (page: AnyPage) => {
     await page.goto(url, { timeout: 20_000, waitUntil: 'domcontentloaded' });
-    const text = await page.innerText('body');
+    const text: string = await page.innerText('body');
     return truncatePage(text.replace(/\s+/g, ' ').trim());
   });
 }

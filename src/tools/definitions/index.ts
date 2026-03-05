@@ -7,4 +7,4 @@ export { getTimeTool } from './get-time.js';
 export { replyToUserTool } from './reply-to-user.js';
 export { runAgentTool } from './run-agent.js';
 export { readWriteStateTool } from './read-write-state.js';
-export { capabilityGapTool } from './capability-gap.js';
+export { capabilityGapTool, setCapabilityGapTempDir, readPendingGaps, resolveGap } from './capability-gap.js';

@@ -15,7 +15,6 @@
 import { spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { deriveAgentId, globalTmpDir } from '../../identity/index.js';
 import type { Tool } from '../index.js';
 

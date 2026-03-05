@@ -1,4 +1,4 @@
-import type { LLMAdapter, LLMResult, Message } from './index.js';
+import type { LLMAdapter, LLMResult } from './index.js';
 
 interface OpenAIToolCall {
   function: { name: string; arguments: string };
