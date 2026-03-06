@@ -197,9 +197,19 @@ export async function runAttributor(
         continue;
       }
 
-      logger.info('attributor', { event: 'tool.call', data: { name: tc.name } });
+      // 对 args 做摘要（截断长字段，防止日志过大）
+      const argsSummary = Object.fromEntries(
+        Object.entries(tc.args ?? {}).map(([k, v]) => {
+          const s = String(v);
+          return [k, s.length > 120 ? s.slice(0, 120) + '…' : s];
+        }),
+      );
+      logger.info('attributor', { event: 'tool.call', data: { name: tc.name, args: argsSummary } });
       const toolResult = await tool.call(tc.args);
-      logger.info('attributor', { event: 'tool.result', data: { name: tc.name, ok: toolResult.ok } });
+      const outputPreview = toolResult.output.length > 120
+        ? toolResult.output.slice(0, 120) + '…'
+        : toolResult.output;
+      logger.info('attributor', { event: 'tool.result', data: { name: tc.name, ok: toolResult.ok, preview: outputPreview } });
 
       toolResultMsgs.push({
         role: 'tool',

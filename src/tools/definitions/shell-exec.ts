@@ -6,6 +6,9 @@
 
 import { execSync } from 'node:child_process';
 import path from 'node:path';
+
+/** shell_exec 输出最大缓冲区（防止大输出触发 ENOBUFS） */
+const SHELL_MAX_BUFFER = 16 * 1024 * 1024; // 16 MB
 import { getWorkDir, isPathAllowed, pathSecurityError } from './workdir-guard.js';
 import type { Tool } from '../index.js';
 
@@ -32,7 +35,7 @@ export const shellExecTool: Tool = {
     }
 
     try {
-      const output = execSync(cmd, { cwd: resolvedCwd, encoding: 'utf8', timeout });
+      const output = execSync(cmd, { cwd: resolvedCwd, encoding: 'utf8', timeout, maxBuffer: SHELL_MAX_BUFFER });
       return { ok: true, output };
     } catch (e: unknown) {
       const err = e as { stdout?: string; stderr?: string; message?: string };

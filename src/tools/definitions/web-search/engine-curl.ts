@@ -7,10 +7,12 @@ import { formatResults, parseDDGResults, truncatePage } from './html-parser.js';
 
 const DDG_HTML_URL = 'https://html.duckduckgo.com/html/';
 const UA = 'Mozilla/5.0 (compatible; openKuroneko/1.0)';
+/** curl 输出最大缓冲区（防止大页面触发 ENOBUFS） */
+const CURL_MAX_BUFFER = 8 * 1024 * 1024; // 8 MB
 
 function curl(args: string, timeoutMs = 20_000): string {
   const cmd = `curl -s -L --max-time ${Math.ceil(timeoutMs / 1000)} -A "${UA}" ${args}`;
-  return execSync(cmd, { encoding: 'utf8', timeout: timeoutMs + 2_000 });
+  return execSync(cmd, { encoding: 'utf8', timeout: timeoutMs + 2_000, maxBuffer: CURL_MAX_BUFFER });
 }
 
 export function curlSearch(query: string, maxResults: number): string {
