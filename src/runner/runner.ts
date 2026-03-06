@@ -5,7 +5,6 @@ import type { RunnerContext, RunnerDeps } from './index.js';
 import { readPendingGaps } from '../tools/definitions/capability-gap.js';
 import type { CapabilityGapRecord } from '../tools/definitions/capability-gap.js';
 
-const MAX_TOOL_ROUNDS = 10;
 
 // ── Context-window management ─────────────────────────────────────────────────
 /**
@@ -76,10 +75,10 @@ export function createRunner(ctx: RunnerContext, deps: RunnerDeps): Runner {
       // ── C: Cognition — build system prompt (ReCAP context) ───────────
       const systemPrompt = buildSystemPrompt(soul, workDir, dailyLog, tasks, mem0Results, pendingGaps, contextArchives);
 
-      // Append new user message to history, then pass full history to LLM
+      // Build message list for LLM
       let messages: Message[];
       if (rawInput) {
-        chatHistory.push({ role: 'user', content: `<master_message>\n${rawInput}\n</master_message>` });
+        chatHistory.push({ role: 'user', content: rawInput });
 
         // Proactive compression: run *before* the context is full so the
         // compressor LLM call itself has enough headroom.
@@ -104,7 +103,7 @@ export function createRunner(ctx: RunnerContext, deps: RunnerDeps): Runner {
       let lastContent = '';
       let currentMessages = [...messages];
 
-      for (let round_t = 0; round_t < MAX_TOOL_ROUNDS; round_t++) {
+      for (let round_t = 0; ; round_t++) {
         logger.info('runner', { event: 'llm.call', data: { round_t } });
 
         let result: LLMResult;
@@ -129,8 +128,6 @@ export function createRunner(ctx: RunnerContext, deps: RunnerDeps): Runner {
         const toolResultMessages: Message[] = [
           { role: 'assistant', content: lastContent },
         ];
-
-        let repliedToMaster = false;
 
         for (const tc of result.toolCalls) {
           toolCallCount++;
@@ -161,59 +158,39 @@ export function createRunner(ctx: RunnerContext, deps: RunnerDeps): Runner {
             role: 'tool',
             content: JSON.stringify({ ok: toolResult.ok, output: toolResult.output }),
           });
-
-          // reply_to_master ends the conversation turn — no further LLM rounds needed
-          if (tc.name === 'reply_to_master' && toolResult.ok) {
-            repliedToMaster = true;
-            // Record agent reply in chat history so next turn has full context
-            const agentReply = String(tc.args['message'] ?? '');
-            if (agentReply) {
-              chatHistory.push({ role: 'assistant', content: agentReply });
-            }
-          }
         }
 
         // Continue conversation with tool results
         currentMessages = [...currentMessages, ...toolResultMessages];
-
-        if (repliedToMaster) {
-          logger.info('runner', { event: 'llm.done', data: { contentLen: lastContent.length, reason: 'replied_to_master' } });
-          break;
-        }
       }
 
-      // ── Fallback output: LLM replied directly without calling reply_to_master ──
-      // Some models return text content instead of using the tool. Pipe it out.
-      if (rawInput && lastContent && toolCallCount === 0) {
+      // ── Output: if this round had user input and LLM produced content, write to output ──
+      if (rawInput && lastContent) {
         try {
           const ep = ioRegistry.getOutput('default');
           if (ep) {
             await ep.write(lastContent);
-            logger.info('runner', { event: 'output.fallback', data: { len: lastContent.length } });
+            logger.info('io', { event: 'output.write', data: { endpointId: 'default', preview: lastContent.slice(0, 80) } });
           }
         } catch (e) {
-          logger.warn('runner', { event: 'output.fallback.error', data: { error: String(e) } });
+          logger.warn('runner', { event: 'output.write.error', data: { error: String(e) } });
         }
-        // Record fallback reply in history too
         chatHistory.push({ role: 'assistant', content: lastContent });
       }
 
       // ── M: Memory ────────────────────────────────────────────────────
-      // Record structured conversation entry (user + agent) for cross-turn context
-      const masterReplyContent = chatHistory.length > 0 && chatHistory[chatHistory.length - 1]?.role === 'assistant'
-        ? chatHistory[chatHistory.length - 1]!.content
-        : lastContent;
+      const agentReplyContent = rawInput && lastContent ? lastContent : null;
 
-      if (rawInput || masterReplyContent) {
+      if (rawInput || agentReplyContent) {
         const logEntry = [
-          rawInput       ? `[User] ${rawInput}` : null,
-          masterReplyContent ? `[Agent] ${masterReplyContent}` : null,
+          rawInput          ? `[User] ${rawInput}` : null,
+          agentReplyContent ? `[Agent] ${agentReplyContent}` : null,
         ].filter(Boolean).join('\n');
 
         memory.appendDailyLog(logEntry);
         logger.debug('runner', { event: 'memory.dailyLog.append', data: { len: logEntry.length } });
 
-        if (masterReplyContent) {
+        if (agentReplyContent) {
           await safeMem0Add(mem0, logEntry, agentId, logger);
         }
       }

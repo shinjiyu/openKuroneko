@@ -4,6 +4,7 @@
  *
  * Usage:
  *   kuroneko --dir <agentPath> [--workspace <workDir>]
+ *            --goal "完成目标..." | --goal-file path/to/goal.md
  *            [--once | --loop fast | --loop interval --interval-ms 60000]
  */
 
@@ -12,24 +13,26 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 import { resolveIdentity, acquirePathLock, releasePathLock } from '../identity/index.js';
-import { loadConfig, watchSoul } from '../config/index.js';
+import { loadConfig } from '../config/index.js';
 import { createIORegistry, createFileInputEndpoint, createFileOutputEndpoint } from '../io/index.js';
 import { createMemoryLayer2 } from '../memory/index.js';
 import { createMem0Client } from '../mem0/index.js';
 import { createLogger } from '../logger/index.js';
 import { createOpenAIAdapter } from '../adapter/index.js';
-import { createRunner } from '../runner/index.js';
-import type { RunnerContext } from '../runner/index.js';
+import { createController } from '../controller/index.js';
+import type { ControllerContext } from '../controller/index.js';
 import { createLoopScheduler } from '../loop/index.js';
 import { createToolRegistry } from '../tools/index.js';
 import {
   readFileTool, writeFileTool, editFileTool, shellExecTool,
-  webSearchTool, getTimeTool, replyToMasterTool, runAgentTool,
-  readWriteStateTool, capabilityGapTool, setCapabilityGapTempDir,
-  listAgentsTool, stopAgentTool, setReplyWriter, seekContextTool,
+  webSearchTool, getTimeTool, runAgentTool,
+  capabilityGapTool, setCapabilityGapTempDir,
+  listAgentsTool, stopAgentTool,
+  writeConstraintTool, writeSkillTool, writeKnowledgeTool,
 } from '../tools/definitions/index.js';
-import { setStateAccessors } from '../tools/definitions/read-write-state.js';
 import { setWorkDirGuard } from '../tools/definitions/workdir-guard.js';
+import { BrainFS } from '../brain/index.js';
+import { createFilesystemStore } from '../archive/index.js';
 
 // ── CLI Definition ────────────────────────────────────────────────────────────
 
@@ -37,10 +40,12 @@ const program = new Command();
 
 program
   .name('kuroneko')
-  .description('Lightweight multi-agent AI system (openKuroneko)')
+  .description('Lightweight multi-agent AI system (openKuroneko) — pi-mono evolutionary loop')
   .requiredOption('--dir <path>', 'Agent directory path (determines identity)')
   .option('--workspace <path>', 'Working directory for file operations (default: --dir)')
-  .option('--once', 'Run a single R-CCAM loop then exit')
+  .option('--goal <text>', 'Goal text to write into .brain/goal.md on startup')
+  .option('--goal-file <path>', 'Path to a goal.md file to copy into .brain/goal.md on startup')
+  .option('--once', 'Run a single loop tick then exit')
   .option('--loop <mode>', 'Loop mode when not --once: fast | interval', 'fast')
   .option('--interval-ms <ms>', 'Tick interval for --loop interval (ms)', '60000')
   .parse(process.argv);
@@ -48,6 +53,8 @@ program
 const opts = program.opts<{
   dir: string;
   workspace?: string;
+  goal?: string;
+  goalFile?: string;
   once?: boolean;
   loop: string;
   intervalMs: string;
@@ -67,15 +74,14 @@ async function main() {
   process.on('SIGINT', cleanup);
   process.on('SIGTERM', cleanup);
 
-  // M11 — Logger (first, so everything else can log)
+  // M11 — Logger
   const logger = createLogger(identity.agentId, identity.tempDir);
   logger.info('cli', {
     event: 'agent.start',
     data: { agentId: identity.agentId, agentPath: identity.agentPath, workDir: identity.workDir },
   });
 
-  // M2 — Config & Soul (hot-reload)
-  // Persist agentPath into config so list_agents can display it
+  // M2 — Config
   const configPath = path.join(identity.tempDir, 'agent.config.json');
   if (!fs.existsSync(configPath)) {
     fs.writeFileSync(configPath, JSON.stringify({ agentPath: identity.agentPath }, null, 2), 'utf8');
@@ -89,19 +95,31 @@ async function main() {
     } catch { /* ignore */ }
   }
   const config = loadConfig(identity.tempDir);
-  const soulWatcher = watchSoul(identity.tempDir, (soul) => {
-    runnerCtx.soul = soul;
-    logger.info('config', { event: 'soul.reloaded', data: { len: soul.length } });
-  });
+
+  // M12 — 初始化 .brain/ 目录 & goal.md
+  const brain = new BrainFS(identity.workDir);
+
+  if (opts.goal) {
+    brain.writeGoal(opts.goal);
+    // 收到新 goal → 重置控制器状态到 DECOMPOSE（新目标，重新规划）
+    brain.writeState({ mode: 'DECOMPOSE', replanCount: 0, replanReason: null, blockedReason: null });
+    logger.info('cli', { event: 'goal.set', data: { preview: opts.goal.slice(0, 100) } });
+  } else if (opts.goalFile) {
+    const goalContent = fs.readFileSync(path.resolve(opts.goalFile), 'utf8');
+    brain.writeGoal(goalContent);
+    brain.writeState({ mode: 'DECOMPOSE', replanCount: 0, replanReason: null, blockedReason: null });
+    logger.info('cli', { event: 'goal.set.file', data: { file: opts.goalFile } });
+  } else if (!brain.readGoal().trim()) {
+    // 既无 --goal 又无 goal.md → 日志警告，控制器启动后会 BLOCK
+    logger.warn('cli', { event: 'goal.missing', data: { msg: 'No --goal or --goal-file provided, and .brain/goal.md is empty. Controller will BLOCK on first tick.' } });
+  }
 
   // M3 — I/O Registry
   const ioRegistry = createIORegistry();
-
   const inputPath  = path.join(identity.tempDir, 'input');
   const outputPath = path.join(identity.tempDir, 'output');
   ioRegistry.registerInput(createFileInputEndpoint('default', inputPath));
   ioRegistry.registerOutput(createFileOutputEndpoint('default', outputPath));
-
   for (const ep of config.endpoints ?? []) {
     if (ep.inputPath)  ioRegistry.registerInput(createFileInputEndpoint(ep.id, ep.inputPath));
     if (ep.outputPath) ioRegistry.registerOutput(createFileOutputEndpoint(ep.id, ep.outputPath));
@@ -113,37 +131,46 @@ async function main() {
   // M6 — Mem0 (L3)
   const mem0 = createMem0Client();
 
-  // M8 — Tools
+  // M8 — Tools setup
   setWorkDirGuard(identity.workDir, identity.tempDir);
   setCapabilityGapTempDir(identity.tempDir);
-  setReplyWriter(async (msg) => {
-    await ioRegistry.getOutput('default')?.write(msg);
-    logger.info('io', { event: 'output.write', data: { endpointId: 'default', preview: msg.slice(0, 80) } });
-  });
-  setStateAccessors(
-    () => memory.readTasks(),
-    (c) => memory.writeTasks(c)
-  );
 
-  const toolRegistry = createToolRegistry([
+  // Executor 工具集：全套标准工具
+  const executorToolRegistry = createToolRegistry([
     readFileTool, writeFileTool, editFileTool, shellExecTool,
-    webSearchTool, getTimeTool, replyToMasterTool, runAgentTool,
-    readWriteStateTool, capabilityGapTool,
-    listAgentsTool, stopAgentTool, seekContextTool,
+    webSearchTool, getTimeTool, runAgentTool,
+    capabilityGapTool,
+    listAgentsTool, stopAgentTool,
+  ]);
+
+  // Attributor 工具集：仅归因专用工具
+  const attributorToolRegistry = createToolRegistry([
+    writeConstraintTool, writeSkillTool, writeKnowledgeTool,
   ]);
 
   // M10 — LLM Adapter
   const llm = createOpenAIAdapter(config.model ? { model: config.model } : {});
 
-  // M9 — R-CCAM Runner context (mutable so soul hot-reload propagates)
-  const runnerCtx: RunnerContext = {
+  // M12.5 — Knowledge Archive（文件系统实现，并发安全，后续可换 Mem0Store）
+  const knowledgeStore = createFilesystemStore();
+
+  // M9 — Controller
+  const controllerCtx: ControllerContext = {
     agentId: identity.agentId,
-    soul: soulWatcher.getSoul(),
     workDir: identity.workDir,
     tempDir: identity.tempDir,
   };
 
-  const runner = createRunner(runnerCtx, { llm, ioRegistry, toolRegistry, memory, mem0, logger });
+  const controller = createController(controllerCtx, {
+    llm,
+    ioRegistry,
+    executorToolRegistry,
+    attributorToolRegistry,
+    memory,
+    mem0,
+    logger,
+    knowledgeStore,
+  });
 
   // M7 — Loop Scheduler
   const loopMode = opts.once
@@ -156,13 +183,11 @@ async function main() {
   });
 
   await scheduler.start(async (): Promise<boolean> => {
-    const result = await runner.run();
+    const result = await controller.tick();
     return result.hadWork;
   });
 
-  // once mode: start() already awaited the tick
   if (loopMode === 'once') {
-    soulWatcher.stop();
     releasePathLock(identity);
     logger.info('cli', { event: 'agent.exit', data: { mode: 'once' } });
     process.exit(0);

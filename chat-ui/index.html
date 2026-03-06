@@ -3,8 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>openKuroneko Chat</title>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <title>openKuroneko Monitor</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -20,260 +19,179 @@
       --yellow:    #d29922;
       --red:       #f85149;
       --purple:    #bc8cff;
-      --user-bg:   #1f6feb;
-      --agent-bg:  #21262d;
+      --orange:    #e3b341;
     }
 
-    html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
+    html, body {
+      height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg); color: var(--text); font-size: 13px;
+    }
 
-    /* ── Layout ── */
     .layout {
       display: grid;
-      grid-template-rows: 48px 1fr;
-      grid-template-columns: 380px 1fr;
+      grid-template-rows: 44px 1fr;
+      grid-template-columns: 300px 1fr;
       height: 100vh;
       overflow: hidden;
     }
 
-    /* ── Header ── */
+    /* Header */
     header {
       grid-column: 1 / -1;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 0 20px;
-      background: var(--bg2);
-      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 12px;
+      padding: 0 16px;
+      background: var(--bg2); border-bottom: 1px solid var(--border);
     }
-    header .logo { font-size: 16px; font-weight: 700; color: var(--blue); }
-    header .agent-id { font-size: 11px; color: var(--text-dim); font-family: monospace; }
-    header .dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: var(--text-dim); margin-left: auto; flex-shrink: 0;
-      transition: background .3s;
+    .logo { font-size: 14px; font-weight: 700; color: var(--blue); }
+    .agent-id { font-size: 10px; color: var(--text-dim); font-family: monospace; }
+    .dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--text-dim); margin-left: auto; flex-shrink: 0; transition: background .3s;
     }
-    header .dot.connected { background: var(--green); }
-    header .status-text { font-size: 11px; color: var(--text-dim); }
+    .dot.connected { background: var(--green); }
+    .status-text { font-size: 11px; color: var(--text-dim); }
 
-    /* ── Chat panel ── */
-    .chat-panel {
-      display: flex;
-      flex-direction: column;
+    /* Sidebar */
+    .sidebar {
+      display: flex; flex-direction: column;
       border-right: 1px solid var(--border);
-      overflow: hidden;
-      min-width: 0;
+      background: var(--bg2); overflow: hidden;
     }
 
-    .messages {
-      flex: 1;
-      overflow-y: auto;
-      padding: 20px 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-      scroll-behavior: smooth;
-    }
-
-    /* Scrollbar */
-    .messages::-webkit-scrollbar { width: 4px; }
-    .messages::-webkit-scrollbar-track { background: transparent; }
-    .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-    /* ── Message bubble ── */
-    .msg { display: flex; gap: 10px; max-width: 100%; }
-    .msg.user { flex-direction: row-reverse; }
-
-    .avatar {
-      width: 32px; height: 32px; border-radius: 50%;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 14px; flex-shrink: 0;
-      background: var(--bg3); border: 1px solid var(--border);
-    }
-    .msg.user .avatar { background: var(--user-bg); border-color: transparent; }
-
-    .bubble {
-      max-width: calc(100% - 80px);
-      padding: 10px 14px;
-      border-radius: 12px;
-      line-height: 1.6;
-      word-break: break-word;
-    }
-    .msg.user .bubble {
-      background: var(--user-bg);
-      color: #fff;
-      border-bottom-right-radius: 3px;
-    }
-    .msg.agent .bubble {
-      background: var(--agent-bg);
-      border: 1px solid var(--border);
-      border-bottom-left-radius: 3px;
-    }
-
-    /* Markdown in bubble */
-    .bubble p { margin: 0 0 8px; }
-    .bubble p:last-child { margin-bottom: 0; }
-    .bubble code {
-      background: rgba(255,255,255,.06);
-      padding: 1px 5px; border-radius: 3px;
-      font-family: 'JetBrains Mono', 'Fira Code', monospace;
-      font-size: 12px;
-    }
-    .bubble pre {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 12px;
-      overflow-x: auto;
-      margin: 8px 0;
-    }
-    .bubble pre code { background: none; padding: 0; }
-    .bubble ul, .bubble ol { padding-left: 18px; margin: 6px 0; }
-    .bubble li { margin: 3px 0; }
-    .bubble h1,.bubble h2,.bubble h3 { margin: 10px 0 6px; font-size: 1em; color: var(--blue); }
-
-    .meta { font-size: 11px; color: var(--text-dim); margin-top: 4px; padding: 0 4px; }
-    .msg.user .meta { text-align: right; }
-
-    /* Thinking indicator */
-    .thinking { display: flex; gap: 4px; align-items: center; padding: 4px 0; }
-    .thinking span {
-      width: 6px; height: 6px; border-radius: 50%;
-      background: var(--text-dim);
-      animation: pulse 1.2s ease-in-out infinite;
-    }
-    .thinking span:nth-child(2) { animation-delay: .2s; }
-    .thinking span:nth-child(3) { animation-delay: .4s; }
-    @keyframes pulse {
-      0%, 100% { opacity: .3; transform: scale(.8); }
-      50% { opacity: 1; transform: scale(1.1); }
-    }
-
-    /* ── Input area ── */
-    .input-area {
-      padding: 12px 16px;
-      background: var(--bg2);
-      border-top: 1px solid var(--border);
-      display: flex;
-      gap: 8px;
-      align-items: flex-end;
-    }
-
-    textarea {
-      flex: 1;
-      background: var(--bg3);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      color: var(--text);
-      padding: 10px 12px;
-      font-size: 14px;
-      font-family: inherit;
-      resize: none;
-      outline: none;
-      max-height: 140px;
-      line-height: 1.5;
-      transition: border-color .2s;
-    }
-    textarea:focus { border-color: var(--blue); }
-    textarea::placeholder { color: var(--text-dim); }
-
-    button#send-btn {
-      background: var(--blue);
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      padding: 0 18px;
-      height: 40px;
-      font-size: 14px;
-      cursor: pointer;
-      flex-shrink: 0;
-      font-weight: 500;
-      transition: opacity .15s;
-    }
-    button#send-btn:hover { opacity: .85; }
-    button#send-btn:disabled { opacity: .4; cursor: default; }
-
-    /* ── Log panel ── */
-    .log-panel {
-      display: flex;
-      flex-direction: column;
-      background: var(--bg2);
-      overflow: hidden;
-    }
-
-    .log-header {
-      padding: 10px 14px;
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--text-dim);
-      text-transform: uppercase;
-      letter-spacing: .06em;
+    .section {
       border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .section-title {
+      padding: 8px 12px 6px;
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .06em; color: var(--text-dim);
+      display: flex; align-items: center; justify-content: space-between;
     }
 
+    /* Mode indicator */
+    .mode-badge {
+      display: inline-block;
+      padding: 3px 10px; border-radius: 12px;
+      font-size: 11px; font-weight: 700; letter-spacing: .04em;
+      margin: 4px 12px 10px;
+    }
+    .mode-badge.DECOMPOSE  { background: rgba(88,166,255,.15); color: var(--blue);   border: 1px solid rgba(88,166,255,.3); }
+    .mode-badge.EXECUTE    { background: rgba(63,185,80,.15);  color: var(--green);  border: 1px solid rgba(63,185,80,.3); }
+    .mode-badge.ATTRIBUTE  { background: rgba(188,140,255,.15);color: var(--purple); border: 1px solid rgba(188,140,255,.3); }
+    .mode-badge.BLOCKED    { background: rgba(248,81,73,.15);  color: var(--red);    border: 1px solid rgba(248,81,73,.3); }
+    .mode-badge.unknown    { background: rgba(139,148,158,.15);color: var(--text-dim); border: 1px solid var(--border); }
+
+    .replan-count { font-size: 10px; color: var(--yellow); }
+
+    /* Milestones */
+    .milestones-list {
+      padding: 4px 0 8px; overflow-y: auto; max-height: 220px;
+    }
+    .milestone-item {
+      display: flex; align-items: flex-start; gap: 8px;
+      padding: 5px 12px; font-size: 11px; line-height: 1.4;
+    }
+    .milestone-item .ms-status {
+      flex-shrink: 0; width: 14px; height: 14px; border-radius: 50%;
+      margin-top: 1px; border: 1.5px solid;
+    }
+    .milestone-item.Active    .ms-status { background: rgba(63,185,80,.4); border-color: var(--green); }
+    .milestone-item.Pending   .ms-status { background: transparent; border-color: var(--border); }
+    .milestone-item.Completed .ms-status { background: var(--green); border-color: var(--green); }
+    .milestone-item .ms-id { color: var(--text-dim); flex-shrink: 0; font-family: monospace; font-size: 10px; }
+    .milestone-item .ms-title { color: var(--text); }
+    .milestone-item.Pending .ms-title { color: var(--text-dim); }
+    .milestone-item.Completed .ms-title { color: var(--text-dim); text-decoration: line-through; }
+
+    /* Goal */
+    .goal-text {
+      padding: 6px 12px 10px;
+      font-size: 11px; color: var(--text-dim); line-height: 1.5;
+      max-height: 100px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+    }
+
+    /* Output panel */
+    .output-list {
+      flex: 1; overflow-y: auto;
+      padding: 8px 0;
+    }
+    .output-item {
+      padding: 6px 12px;
+      font-size: 11px; line-height: 1.5;
+      border-left: 2px solid;
+      margin: 3px 0; white-space: pre-wrap; word-break: break-word;
+      background: rgba(255,255,255,.02);
+    }
+    .output-item.block    { border-color: var(--red);    color: var(--red); }
+    .output-item.complete { border-color: var(--green);  color: var(--green); }
+    .output-item.other    { border-color: var(--blue);   color: var(--text); }
+    .output-item .out-ts  { font-size: 9px; color: var(--text-dim); display: block; margin-bottom: 3px; }
+
+    /* BLOCK input */
+    .block-reply {
+      padding: 8px 12px;
+      border-top: 1px solid var(--border);
+      background: rgba(248,81,73,.05);
+      display: none; flex-direction: column; gap: 6px;
+    }
+    .block-reply.visible { display: flex; }
+    .block-reply label { font-size: 10px; color: var(--red); font-weight: 600; }
+    .block-reply textarea {
+      background: var(--bg3); border: 1px solid var(--red);
+      border-radius: 6px; color: var(--text);
+      padding: 6px 8px; font-size: 12px; font-family: inherit;
+      resize: vertical; outline: none; min-height: 48px;
+    }
+    .block-reply button {
+      background: var(--red); color: #fff; border: none;
+      border-radius: 6px; padding: 5px 12px; font-size: 12px;
+      cursor: pointer; align-self: flex-end; font-weight: 500;
+    }
+    .block-reply button:hover { opacity: .85; }
+
+    /* Log panel */
+    .log-panel {
+      display: flex; flex-direction: column;
+      background: var(--bg); overflow: hidden;
+    }
+    .log-header {
+      padding: 8px 14px;
+      font-size: 10px; font-weight: 700; color: var(--text-dim);
+      text-transform: uppercase; letter-spacing: .06em;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      flex-shrink: 0;
+    }
     .log-clear {
       cursor: pointer; color: var(--text-dim); font-size: 10px;
       padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);
-      background: none; color: var(--text-dim);
+      background: none;
     }
     .log-clear:hover { background: var(--bg3); color: var(--text); }
-
     .log-entries {
-      flex: 1;
-      overflow-y: auto;
-      padding: 8px 0;
-      font-family: 'JetBrains Mono', 'Fira Code', monospace;
-      font-size: 11px;
+      flex: 1; overflow-y: auto; padding: 4px 0;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 11px;
     }
     .log-entries::-webkit-scrollbar { width: 3px; }
     .log-entries::-webkit-scrollbar-thumb { background: var(--border); }
-
     .log-entry {
-      padding: 4px 14px;
-      border-left: 2px solid transparent;
-      transition: background .1s;
+      padding: 3px 14px; border-left: 2px solid transparent;
     }
-    .log-entry:hover { background: rgba(255,255,255,.03); }
-
-    .log-entry.debug { color: var(--text-dim); border-left-color: #444; }
+    .log-entry:hover { background: rgba(255,255,255,.025); }
+    .log-entry.debug { color: var(--text-dim); border-left-color: #333; }
     .log-entry.info  { color: var(--text);     border-left-color: var(--blue); }
     .log-entry.warn  { color: var(--yellow);   border-left-color: var(--yellow); }
     .log-entry.error { color: var(--red);      border-left-color: var(--red); }
-
-    .log-header-row {
-      display: flex;
-      gap: 6px;
-      align-items: baseline;
-    }
-    .log-level {
-      font-size: 9px; font-weight: 700; text-transform: uppercase;
-      min-width: 32px; opacity: .8; flex-shrink: 0;
-    }
-    .log-ts    { color: var(--text-dim); font-size: 10px; flex-shrink: 0; }
-    .log-module { color: var(--purple); min-width: 44px; flex-shrink: 0; }
+    .log-header-row  { display: flex; gap: 6px; align-items: baseline; }
+    .log-level  { font-size: 9px; font-weight: 700; text-transform: uppercase; min-width: 32px; opacity:.8; flex-shrink:0; }
+    .log-ts     { color: var(--text-dim); font-size: 10px; flex-shrink: 0; }
+    .log-module { color: var(--purple); min-width: 56px; flex-shrink: 0; }
     .log-event  { color: inherit; opacity: .9; }
-    .log-data  {
+    .log-data   {
       color: var(--text-dim); font-size: 10px;
       white-space: pre-wrap; word-break: break-all;
-      margin-top: 2px; padding-left: 38px;
-      line-height: 1.4;
-    }
-
-    /* ── Welcome message ── */
-    .welcome {
-      text-align: center;
-      padding: 40px 24px;
-      color: var(--text-dim);
-    }
-    .welcome h2 { font-size: 18px; color: var(--text); margin-bottom: 8px; }
-    .welcome p  { font-size: 13px; line-height: 1.7; }
-
-    @media (max-width: 700px) {
-      .layout { grid-template-columns: 1fr; }
-      .log-panel { display: none; }
-      .chat-panel { border-right: none; }
+      margin-top: 1px; padding-left: 38px; line-height: 1.4;
     }
   </style>
 </head>
@@ -288,24 +206,43 @@
     <span class="status-text" id="status-text">Connecting</span>
   </header>
 
-  <!-- Chat panel -->
-  <div class="chat-panel">
-    <div class="messages" id="messages">
-      <div class="welcome">
-        <h2>Chat Agent</h2>
-        <p>Agent 正在启动，请稍候…<br/>连接成功后即可开始对话。</p>
+  <!-- Sidebar -->
+  <div class="sidebar">
+
+    <!-- Controller mode -->
+    <div class="section">
+      <div class="section-title">
+        <span>控制器模式</span>
+        <span class="replan-count" id="replan-count"></span>
+      </div>
+      <div class="mode-badge unknown" id="mode-badge">—</div>
+    </div>
+
+    <!-- Milestones -->
+    <div class="section">
+      <div class="section-title"><span>里程碑</span></div>
+      <div class="milestones-list" id="milestones-list">
+        <div style="padding:6px 12px;color:var(--text-dim);font-size:11px;">尚无里程碑</div>
       </div>
     </div>
 
-    <div class="input-area">
-      <textarea
-        id="input"
-        rows="1"
-        placeholder="发送消息… (Enter 发送，Shift+Enter 换行)"
-        disabled
-      ></textarea>
-      <button id="send-btn" disabled>发送</button>
+    <!-- Goal -->
+    <div class="section">
+      <div class="section-title"><span>目标 (Goal)</span></div>
+      <div class="goal-text" id="goal-text">—</div>
     </div>
+
+    <!-- Output messages -->
+    <div class="section-title" style="flex-shrink:0"><span>输出消息</span></div>
+    <div class="output-list" id="output-list"></div>
+
+    <!-- BLOCK reply input (only shown when BLOCKED) -->
+    <div class="block-reply" id="block-reply">
+      <label>⚠ Agent 已阻塞，请提供指示：</label>
+      <textarea id="block-input" placeholder="输入指示或资源…" rows="2"></textarea>
+      <button id="block-send">发送</button>
+    </div>
+
   </div>
 
   <!-- Log panel -->
@@ -320,43 +257,30 @@
 </div>
 
 <script>
-  // ── Marked config ──────────────────────────────────────────────────────────
-  marked.setOptions({ breaks: true, gfm: true });
-
-  // ── DOM refs ───────────────────────────────────────────────────────────────
-  const messagesEl  = document.getElementById('messages');
-  const inputEl     = document.getElementById('input');
-  const sendBtn     = document.getElementById('send-btn');
-  const statusDot   = document.getElementById('status-dot');
-  const statusText  = document.getElementById('status-text');
-  const agentIdEl   = document.getElementById('agent-id');
+  // ── DOM ──────────────────────────────────────────────────────────────────────
+  const agentIdEl    = document.getElementById('agent-id');
+  const statusDot    = document.getElementById('status-dot');
+  const statusText   = document.getElementById('status-text');
+  const modeBadge    = document.getElementById('mode-badge');
+  const replanCount  = document.getElementById('replan-count');
+  const milestonesList = document.getElementById('milestones-list');
+  const goalText     = document.getElementById('goal-text');
+  const outputList   = document.getElementById('output-list');
+  const blockReply   = document.getElementById('block-reply');
+  const blockInput   = document.getElementById('block-input');
+  const blockSend    = document.getElementById('block-send');
   const logEntriesEl = document.getElementById('log-entries');
 
-  // ── State ──────────────────────────────────────────────────────────────────
-  let connected = false;
-  let thinking  = false;
-  let thinkingEl = null;
-
-  // ── SSE connection ─────────────────────────────────────────────────────────
+  // ── SSE ──────────────────────────────────────────────────────────────────────
   function connect() {
     const es = new EventSource('/events');
-
     es.onmessage = e => {
       const { type, data } = JSON.parse(e.data);
-      if (type === 'connected') {
-        setConnected(true);
-        agentIdEl.textContent = `agentId: ${data.agentId}`;
-        removeWelcome();
-      } else if (type === 'user') {
-        // We already showed user message optimistically; skip if duplicate
-      } else if (type === 'agent') {
-        removeThinking();
-        appendMessage('agent', data);
-      } else if (type === 'log') {
-        appendLog(data);
-      }
+      if      (type === 'connected') handleConnected(data);
+      else if (type === 'brain')     handleBrain(data);
+      else if (type === 'output')    handleOutput(data);
+      else if (type === 'log')       appendLog(data);
     };
-
     es.onerror = () => {
       setConnected(false);
       setTimeout(connect, 3000);
@@ -364,164 +288,126 @@
   }
 
   function setConnected(val) {
-    connected = val;
     statusDot.classList.toggle('connected', val);
     statusText.textContent = val ? 'Connected' : 'Reconnecting…';
-    inputEl.disabled = !val;
-    sendBtn.disabled = !val;
-    if (val) inputEl.focus();
   }
 
-  // ── Chat messages ──────────────────────────────────────────────────────────
-  function removeWelcome() {
-    const w = messagesEl.querySelector('.welcome');
-    if (w) w.remove();
+  function handleConnected(data) {
+    setConnected(true);
+    agentIdEl.textContent = `agentId: ${data.agentId}`;
   }
 
-  function now() {
-    return new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  // ── Brain state ──────────────────────────────────────────────────────────────
+  function handleBrain(brain) {
+    // Controller state
+    let state = {};
+    try { state = JSON.parse(brain['controller-state.json'] || '{}'); } catch {}
+    const mode = state.mode || 'unknown';
+    modeBadge.textContent = mode;
+    modeBadge.className = `mode-badge ${mode}`;
+    replanCount.textContent = state.replanCount > 0 ? `REPLAN ×${state.replanCount}` : '';
+
+    // Show/hide BLOCK input
+    blockReply.classList.toggle('visible', mode === 'BLOCKED');
+
+    // Goal
+    const goalRaw = (brain['goal.md'] || '').trim();
+    goalText.textContent = goalRaw || '（未设置）';
+
+    // Milestones
+    const msRaw = (brain['milestones.md'] || '').trim();
+    renderMilestones(msRaw);
   }
 
-  function appendMessage(role, text) {
-    const isUser = role === 'user';
-    const wrap = document.createElement('div');
-    wrap.className = `msg ${role}`;
-
-    const avatar = document.createElement('div');
-    avatar.className = 'avatar';
-    avatar.textContent = isUser ? '👤' : '🤖';
-
-    const right = document.createElement('div');
-    right.style.display = 'flex';
-    right.style.flexDirection = 'column';
-    right.style.gap = '2px';
-    if (isUser) right.style.alignItems = 'flex-end';
-
-    const bubble = document.createElement('div');
-    bubble.className = 'bubble';
-    if (isUser) {
-      bubble.textContent = text;
-    } else {
-      bubble.innerHTML = marked.parse(text);
+  function renderMilestones(raw) {
+    if (!raw) {
+      milestonesList.innerHTML = '<div style="padding:6px 12px;color:var(--text-dim);font-size:11px;">尚无里程碑</div>';
+      return;
     }
-
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    meta.textContent = now();
-
-    right.appendChild(bubble);
-    right.appendChild(meta);
-    wrap.appendChild(avatar);
-    wrap.appendChild(right);
-
-    messagesEl.appendChild(wrap);
-    scrollToBottom();
-    return wrap;
+    const items = [];
+    for (const line of raw.split('\n')) {
+      // [M1] [Active]  title — desc
+      const m = line.match(/^\s*\[(\w+)\]\s+\[(Active|Pending|Completed)\]\s+(.+?)\s+[—–-]\s+(.+)\s*$/u);
+      if (!m) continue;
+      items.push({ id: m[1], status: m[2], title: m[3].trim(), desc: m[4].trim() });
+    }
+    if (items.length === 0) {
+      milestonesList.innerHTML = '<div style="padding:6px 12px;color:var(--text-dim);font-size:11px;">' + raw.slice(0,100) + '</div>';
+      return;
+    }
+    milestonesList.innerHTML = items.map(ms =>
+      `<div class="milestone-item ${ms.status}">
+        <div class="ms-status"></div>
+        <div>
+          <span class="ms-id">${ms.id}</span>
+          <span class="ms-title"> ${ms.title}</span>
+        </div>
+      </div>`
+    ).join('');
   }
 
-  function showThinking() {
-    if (thinking) return;
-    thinking = true;
-    const wrap = document.createElement('div');
-    wrap.className = 'msg agent';
-    wrap.id = '__thinking';
-
-    const avatar = document.createElement('div');
-    avatar.className = 'avatar';
-    avatar.textContent = '🤖';
-
-    const bubble = document.createElement('div');
-    bubble.className = 'bubble';
-    bubble.innerHTML = '<div class="thinking"><span></span><span></span><span></span></div>';
-
-    wrap.appendChild(avatar);
-    wrap.appendChild(bubble);
-    messagesEl.appendChild(wrap);
-    scrollToBottom();
-    thinkingEl = wrap;
+  // ── Output messages ──────────────────────────────────────────────────────────
+  function handleOutput(content) {
+    const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    const type = content.startsWith('[BLOCK]') ? 'block'
+               : content.startsWith('[COMPLETE]') ? 'complete'
+               : 'other';
+    const div = document.createElement('div');
+    div.className = `output-item ${type}`;
+    div.innerHTML = `<span class="out-ts">${ts}</span>${escHtml(content)}`;
+    outputList.appendChild(div);
+    outputList.scrollTop = outputList.scrollHeight;
   }
 
-  function removeThinking() {
-    thinking = false;
-    const el = document.getElementById('__thinking');
-    if (el) el.remove();
-    thinkingEl = null;
-  }
-
-  function scrollToBottom() {
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  }
-
-  // ── Send ───────────────────────────────────────────────────────────────────
-  async function sendMessage() {
-    const text = inputEl.value.trim();
-    if (!text || !connected) return;
-
-    inputEl.value = '';
-    autoResize();
-    appendMessage('user', text);
-    showThinking();
-
+  // ── BLOCK reply ──────────────────────────────────────────────────────────────
+  blockSend.addEventListener('click', async () => {
+    const msg = blockInput.value.trim();
+    if (!msg) return;
     try {
       await fetch('/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: msg }),
       });
+      blockInput.value = '';
     } catch (e) {
-      removeThinking();
-      appendMessage('agent', `⚠️ 发送失败：${e.message}`);
-    }
-  }
-
-  // ── Input auto-resize & keyboard ──────────────────────────────────────────
-  function autoResize() {
-    inputEl.style.height = 'auto';
-    inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + 'px';
-  }
-
-  inputEl.addEventListener('input', autoResize);
-  inputEl.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
+      alert('发送失败: ' + e.message);
     }
   });
-  sendBtn.addEventListener('click', sendMessage);
+  blockInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); blockSend.click(); }
+  });
 
-  // ── Logs ───────────────────────────────────────────────────────────────────
-  const LOG_COLORS = { debug: 'debug', info: 'info', warn: 'warn', error: 'error' };
+  // ── Logs ─────────────────────────────────────────────────────────────────────
   let logCount = 0;
-  const MAX_LOG_ENTRIES = 500;
+  const MAX_LOGS = 800;
 
   function appendLog(entry) {
     const level  = entry.level ?? 'info';
     const module = entry.module ?? '';
-    const event  = entry.event ?? '';
+    const event  = entry.event  ?? '';
     const ts     = entry.ts ? new Date(entry.ts).toLocaleTimeString('zh-CN', { hour12: false }) : '';
     const data   = entry.data ? JSON.stringify(entry.data, null, 2) : '';
 
     const div = document.createElement('div');
-    div.className = `log-entry ${LOG_COLORS[level] ?? 'info'}`;
+    div.className = `log-entry ${level}`;
     div.innerHTML =
       `<div class="log-header-row">` +
         `<span class="log-level">${level}</span>` +
         `<span class="log-ts">${ts}</span>` +
-        `<span class="log-module">${module}</span>` +
-        `<span class="log-event">${event}</span>` +
+        `<span class="log-module">${escHtml(module)}</span>` +
+        `<span class="log-event">${escHtml(event)}</span>` +
       `</div>` +
-      (data ? `<div class="log-data">${data}</div>` : '');
+      (data ? `<div class="log-data">${escHtml(data)}</div>` : '');
 
     logEntriesEl.appendChild(div);
     logCount++;
 
-    // Trim old entries
-    if (logCount > MAX_LOG_ENTRIES) {
+    if (logCount > MAX_LOGS) {
       logEntriesEl.firstChild?.remove();
       logCount--;
     }
 
-    // Auto-scroll only if already near bottom
     const { scrollTop, scrollHeight, clientHeight } = logEntriesEl;
     if (scrollHeight - scrollTop - clientHeight < 80) {
       logEntriesEl.scrollTop = logEntriesEl.scrollHeight;
@@ -533,7 +419,11 @@
     logCount = 0;
   });
 
-  // ── Boot ───────────────────────────────────────────────────────────────────
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ── Boot ─────────────────────────────────────────────────────────────────────
   connect();
 </script>
 </body>

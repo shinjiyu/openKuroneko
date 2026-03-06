@@ -5,9 +5,10 @@ export { shellExecTool } from './shell-exec.js';
 export { setWorkDirGuard, isPathAllowed } from './workdir-guard.js';
 export { webSearchTool } from './web-search/index.js';
 export { getTimeTool } from './get-time.js';
-export { replyToMasterTool, setReplyWriter } from './reply-to-master.js';
 export { runAgentTool } from './run-agent.js';
-export { readWriteStateTool } from './read-write-state.js';
 export { capabilityGapTool, setCapabilityGapTempDir, readPendingGaps, resolveGap } from './capability-gap.js';
 export { listAgentsTool, stopAgentTool } from './agent-registry.js';
-export { seekContextTool } from './seek-context.js';
+// Attributor 专用工具
+export { writeConstraintTool } from './write-constraint.js';
+export { writeSkillTool } from './write-skill.js';
+export { writeKnowledgeTool } from './write-knowledge.js';
