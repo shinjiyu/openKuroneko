@@ -100,14 +100,14 @@ async function main() {
   const brain = new BrainFS(identity.workDir);
 
   if (opts.goal) {
+    // 新 goal 传入 → 归档旧任务的 brain，从干净状态开始
+    brain.archiveForNewTask();
     brain.writeGoal(opts.goal);
-    // 收到新 goal → 重置控制器状态到 DECOMPOSE（新目标，重新规划）
-    brain.writeState({ mode: 'DECOMPOSE', replanCount: 0, replanReason: null, blockedReason: null });
     logger.info('cli', { event: 'goal.set', data: { preview: opts.goal.slice(0, 100) } });
   } else if (opts.goalFile) {
     const goalContent = fs.readFileSync(path.resolve(opts.goalFile), 'utf8');
+    brain.archiveForNewTask();
     brain.writeGoal(goalContent);
-    brain.writeState({ mode: 'DECOMPOSE', replanCount: 0, replanReason: null, blockedReason: null });
     logger.info('cli', { event: 'goal.set.file', data: { file: opts.goalFile } });
   } else if (!brain.readGoal().trim()) {
     // 既无 --goal 又无 goal.md → 日志警告，控制器启动后会 BLOCK

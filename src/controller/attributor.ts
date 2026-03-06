@@ -10,6 +10,14 @@ import type { Message, LLMAdapter } from '../adapter/index.js';
 import type { Logger } from '../logger/index.js';
 import type { ToolRegistry } from '../tools/index.js';
 import type { Milestone, ExecutionEntry } from '../brain/index.js';
+import { BrainFS } from '../brain/index.js';
+
+/** Attributor 中单条工具结果的最大内联字符数（Executor 已压缩，此处做二次保底截断） */
+const ATTR_RESULT_MAX  = 2000;
+/** Attributor 中 preState / postState 的最大字符数 */
+const ATTR_STATE_MAX   = 3000;
+/** Attributor 中错误摘要单条最大字符数 */
+const ATTR_ERROR_MAX   = 500;
 
 export type ControlFlag = 'CONTINUE' | 'SUCCESS_AND_NEXT' | 'REPLAN' | 'BLOCK';
 
@@ -30,12 +38,25 @@ export const ATTRIBUTOR_SYSTEM = `你是一个强制归因器（Mandatory Attrib
 格式："[红线] <禁止行为> — <原因>"
       "[避坑] <注意事项> — <适用场景>"
 
-【任务 3 — 技能提取】（可选，SUCCESS_AND_NEXT 时优先）
-如果本次执行中有「解决了某类问题」的可复用模式，调用 write_skill 工具。
-格式：
-  场景：<遇到什么情况>
-  步骤：<有效的操作序列，按序列出>
-  验证：<如何确认成功>
+【任务 3 — 技能提取】（严格可选，决策树如下）
+用户消息末尾会附上「已有相关技能列表」。请先查阅：
+
+  ① 技能列表中已有高度相似的技能（标题/标签吻合）
+    → **不要调用 write_skill**
+    → 若本次执行中 Executor 明显没有利用该已有技能（重复犯同样错误）：
+        调用 write_constraint："[红线] 执行「<里程碑标题>」类任务时，必须参考技能库中的「<技能标题>」(id: <id>)"
+    → 否则直接跳过任务 3
+
+  ② 技能列表中没有类似技能，且满足以下**全部**新增条件：
+    ✅ 本次执行完成了一个非平凡目标（不是仅读文件、仅扫目录、仅同步状态等）
+    ✅ 解决方案含有至少 3 步操作且包含决策逻辑，而非单一工具调用
+    ✅ 该模式可以"原样复用"于未来不同任务，不含具体路径/文件名
+    ❌ 禁止写入：「读取文件/扫描目录」「更新/同步里程碑」「创建目录」等机械性单步操作
+    → **调用 write_skill** 写入新技能
+    格式：
+      场景：<通用场景描述，不含具体文件名>
+      步骤：<有效操作序列，至少 3 步>
+      验证：<如何确认成功>
 
 【任务 4 — 知识提取】（可选）
 如果发现了关于环境/项目的新客观事实，调用 write_knowledge 工具。
@@ -64,6 +85,9 @@ BLOCK 时 REASON 必须写清：需要人类具体做什么（例如：请提供
 - 属于「需人类协助」情形 → 必须 BLOCK
 - 无法判断是否有进展且不涉及人类协助 → 倾向 REPLAN，而非 CONTINUE`;
 
+/** 归因时注入的相关技能索引条目上限 */
+const ATTR_SKILL_TOP_K = 8;
+
 export async function runAttributor(
   activeMilestone: Milestone,
   preState: string,
@@ -72,32 +96,65 @@ export async function runAttributor(
   attributorToolRegistry: ToolRegistry,
   llm: LLMAdapter,
   logger: Logger,
+  brain?: BrainFS,
 ): Promise<AttributeResult> {
-  // Build execution log text
+  // Build execution log text（对每条 result.output 做保底截断，Executor 已压缩过一次）
   const logSections = executionLog.length === 0
     ? '（无工具调用）'
-    : executionLog.map((e, i) => [
-        `### 操作 ${i + 1}`,
-        `工具：${e.toolName}`,
-        `参数：${JSON.stringify(e.args, null, 2)}`,
-        `结果：${JSON.stringify(e.result)}`,
-        e.error ? `错误：${e.error}` : '',
-      ].filter(Boolean).join('\n')).join('\n\n');
+    : executionLog.map((e, i) => {
+        const resultStr = JSON.stringify(e.result);
+        const resultDisplay = resultStr.length > ATTR_RESULT_MAX
+          ? resultStr.slice(0, ATTR_RESULT_MAX) + `…（已截断，完整长度 ${resultStr.length} 字符）`
+          : resultStr;
+        return [
+          `### 操作 ${i + 1}`,
+          `工具：${e.toolName}`,
+          `参数：${JSON.stringify(e.args, null, 2)}`,
+          `结果：${resultDisplay}`,
+          e.error ? `错误：${e.error}` : '',
+        ].filter(Boolean).join('\n');
+      }).join('\n\n');
 
-  // Collect errors from log
+  // Collect errors from log（错误摘要单条截断）
   const errors = executionLog
     .filter(e => !e.result.ok || e.error)
-    .map(e => `- ${e.toolName}: ${e.error ?? e.result.output}`)
+    .map(e => {
+      const msg = e.error ?? e.result.output;
+      return `- ${e.toolName}: ${msg.length > ATTR_ERROR_MAX ? msg.slice(0, ATTR_ERROR_MAX) + '…' : msg}`;
+    })
     .join('\n');
 
   const milestoneText = `[${activeMilestone.id}] [Active] ${activeMilestone.title} — ${activeMilestone.description}`;
 
+  // preState / postState 也做截断（environment snapshot 可能很大）
+  const preDisplay  = preState  ? preState.slice(0, ATTR_STATE_MAX)  + (preState.length  > ATTR_STATE_MAX  ? '…（已截断）' : '') : '（无快照）';
+  const postDisplay = postState ? postState.slice(0, ATTR_STATE_MAX) + (postState.length > ATTR_STATE_MAX  ? '…（已截断）' : '') : '（无快照）';
+
+  // 检索与当前里程碑相关的已有技能索引，注入归因上下文（只注入索引行，不读全文）
+  let existingSkillsSection = '';
+  if (brain) {
+    const skillQuery = `${activeMilestone.title} ${activeMilestone.description}`;
+    const matched = brain.searchSkills(skillQuery, ATTR_SKILL_TOP_K);
+    if (matched.length > 0) {
+      const lines = matched.map(e =>
+        `- 【${e.category}】《${e.title}》 | 标签: ${e.tags.join(', ') || '(无)'} | id: ${e.id}`,
+      );
+      existingSkillsSection =
+        `## 已有相关技能（仅索引，供任务3决策用）\n` +
+        `（共 ${matched.length} 条，按相关度排序）\n\n` +
+        lines.join('\n');
+    } else {
+      existingSkillsSection = '## 已有相关技能（仅索引，供任务3决策用）\n（暂无相关技能）';
+    }
+  }
+
   const userMessage = [
     `## 目标里程碑\n${milestoneText}`,
-    `## 执行前状态（Pre-State）\n${preState || '（无快照）'}`,
+    `## 执行前状态（Pre-State）\n${preDisplay}`,
     `## 执行日志\n${logSections}`,
-    `## 执行后状态（Post-State）\n${postState || '（无快照）'}`,
+    `## 执行后状态（Post-State）\n${postDisplay}`,
     errors ? `## 错误摘要\n${errors}` : '',
+    existingSkillsSection,
   ].filter(Boolean).join('\n\n---\n\n');
 
   logger.info('attributor', {

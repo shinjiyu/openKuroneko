@@ -9,20 +9,34 @@ import fs from 'node:fs';
 import type { InputEndpoint, OutputEndpoint } from './index.js';
 
 export function createFileInputEndpoint(id: string, filePath: string): InputEndpoint {
-  let readOffset = 0;
+  // offset 持久化到旁路文件，进程重启后不重复读取已消费内容
+  const offsetFile = `${filePath}.offset`;
+
+  function readOffset(): number {
+    try {
+      return parseInt(fs.readFileSync(offsetFile, 'utf8'), 10) || 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  function writeOffset(n: number): void {
+    fs.writeFileSync(offsetFile, String(n), 'utf8');
+  }
 
   return {
     id,
     async read(): Promise<string | null> {
       if (!fs.existsSync(filePath)) return null;
       const stat = fs.statSync(filePath);
-      if (stat.size <= readOffset) return null; // no new bytes
+      const offset = readOffset();
+      if (stat.size <= offset) return null; // no new bytes
 
       const fd = fs.openSync(filePath, 'r');
-      const buf = Buffer.alloc(stat.size - readOffset);
-      fs.readSync(fd, buf, 0, buf.length, readOffset);
+      const buf = Buffer.alloc(stat.size - offset);
+      fs.readSync(fd, buf, 0, buf.length, offset);
       fs.closeSync(fd);
-      readOffset = stat.size;
+      writeOffset(stat.size);
 
       const content = buf.toString('utf8').trim();
       return content || null;

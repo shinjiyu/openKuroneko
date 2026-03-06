@@ -79,23 +79,31 @@ export function createController(ctx: ControllerContext, deps: ControllerDeps): 
           return { hadWork: false }; // 继续等待，调度器退避
         }
 
-        // 如果是"目标完成"后的 BLOCKED，input 视为新的外脑指示 → 直接 REPLAN（重新规划）
+        // 如果是"目标完成"后的 BLOCKED，input 视为全新任务 → 归档旧 brain，重新规划
         const isPostComplete = state.blockedReason === '目标完成，等待新目标';
         if (isPostComplete) {
-          // 将 input 追加到 goal.md 作为新目标说明
-          const oldGoal = brain.readGoal();
-          brain.writeGoal(`${oldGoal}\n\n---\n## 新指示\n${input}`);
-          state.replanReason = `收到新指示：${input.slice(0, 100)}`;
+          // 归档旧任务的 brain 文件（knowledge/constraints/milestones），从干净状态开始
+          brain.archiveForNewTask();
+          logger.info('controller', { event: 'brain.archived.for.new.task', data: { preview: input.slice(0, 80) } });
+          // 将 input 作为全新 goal
+          brain.writeGoal(input);
+          state.replanReason = `新任务：${input.slice(0, 100)}`;
           state.mode = 'DECOMPOSE';
           state.replanCount = 0;
           state.blockedReason = null;
           brain.writeState(state);
-          logger.info('controller', { event: 'new.goal.from.input', data: { preview: input.slice(0, 80) } });
+          logger.info('controller', { event: 'new.task.from.input', data: { preview: input.slice(0, 80) } });
           return { hadWork: true };
         }
 
         // 方案 C：LLM 判断 CONTINUE vs REPLAN
         const decision = await resolveBlock(state.blockedReason ?? '', input, llm, logger);
+
+        // 将外脑的解封指令写入 constraints，让后续 Executor/Decomposer 都能看到
+        const humanNote = `\n\n<!-- 外脑解封指令 ${new Date().toISOString()} -->\n[人类指示] ${input}`;
+        brain.appendConstraint(humanNote);
+        logger.info('controller', { event: 'block.human.note.written', data: { preview: input.slice(0, 80) } });
+
         if (decision === 'CONTINUE') {
           state.mode = 'EXECUTE';
           state.blockedReason = null;
@@ -215,6 +223,7 @@ export function createController(ctx: ControllerContext, deps: ControllerDeps): 
           attributorToolRegistry,
           llm,
           logger,
+          brain,
         );
 
         // 归因完成 → 丢弃 executionLog

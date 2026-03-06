@@ -25,6 +25,9 @@ interface OAIStreamChunk {
   choices: Array<{ delta: OAIStreamDelta; finish_reason: string | null }>;
 }
 
+/** 单次 LLM HTTP 请求超时（毫秒）。默认 120s，可通过 LLM_TIMEOUT_MS 环境变量覆盖。 */
+const LLM_TIMEOUT_MS = parseInt(process.env['LLM_TIMEOUT_MS'] ?? '120000', 10);
+
 // ── Adapter factory ───────────────────────────────────────────────────────────
 
 export function createOpenAIAdapter(options?: {
@@ -72,6 +75,7 @@ export function createOpenAIAdapter(options?: {
       method: 'POST',
       headers,
       body: buildBody(systemPrompt, messages, tools, false),
+      signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
     });
 
     if (!res.ok) {
@@ -101,6 +105,7 @@ export function createOpenAIAdapter(options?: {
       method: 'POST',
       headers,
       body: buildBody(systemPrompt, messages, undefined, true),
+      signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
     });
 
     if (!res.ok) {

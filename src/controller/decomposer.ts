@@ -8,8 +8,12 @@
 
 import type { LLMAdapter } from '../adapter/index.js';
 import type { Logger } from '../logger/index.js';
-import type { BrainFS } from '../brain/index.js';
+import { BrainFS } from '../brain/index.js';
 import type { KnowledgeStore } from '../archive/index.js';
+
+// Decomposer 读取 brain 文件时的字符上限（取最近内容）
+const CONSTRAINTS_MAX = 4000;
+const MILESTONES_MAX  = 3000;
 
 export const DECOMPOSE_SYSTEM = `你是一个战术拆解器（Tactical Decomposer）。你的唯一职责是：
 根据目标和约束，制定一个 3-5 条里程碑的行动计划。
@@ -38,8 +42,8 @@ export async function runDecomposer(
   knowledgeStore?: KnowledgeStore,
 ): Promise<DecomposeResult> {
   const goal        = brain.readGoal()        || '（goal.md 为空）';
-  const constraints = brain.readConstraints() || '暂无约束';
-  const milestones  = brain.readMilestones()  || '尚无里程碑';
+  const constraints = BrainFS.tail(brain.readConstraints() || '暂无约束', CONSTRAINTS_MAX);
+  const milestones  = BrainFS.tail(brain.readMilestones()  || '尚无里程碑', MILESTONES_MAX);
 
   const reason = replanReason ?? '初次规划';
 
