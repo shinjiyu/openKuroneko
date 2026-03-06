@@ -28,6 +28,10 @@ export function getWorkDir(): string {
   return _workDir;
 }
 
+export function getTempDir(): string {
+  return _tempDir ?? _workDir;
+}
+
 export function pathSecurityError(targetPath: string): string {
   return (
     `Security violation: path "${path.resolve(targetPath)}" is outside allowed directories. ` +

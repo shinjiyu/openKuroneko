@@ -24,7 +24,8 @@ import type { ControllerContext } from '../controller/index.js';
 import { createLoopScheduler } from '../loop/index.js';
 import { createToolRegistry } from '../tools/index.js';
 import {
-  readFileTool, writeFileTool, editFileTool, shellExecTool,
+  readFileTool, writeFileTool, editFileTool,
+  shellExecTool, shellExecBgTool, shellReadOutputTool, shellKillTool,
   webSearchTool, getTimeTool, runAgentTool,
   capabilityGapTool, setCapabilityGapTempDir,
   listAgentsTool, stopAgentTool,
@@ -137,7 +138,8 @@ async function main() {
 
   // Executor 工具集：全套标准工具
   const executorToolRegistry = createToolRegistry([
-    readFileTool, writeFileTool, editFileTool, shellExecTool,
+    readFileTool, writeFileTool, editFileTool,
+    shellExecTool, shellExecBgTool, shellReadOutputTool, shellKillTool,
     webSearchTool, getTimeTool, runAgentTool,
     capabilityGapTool,
     listAgentsTool, stopAgentTool,
