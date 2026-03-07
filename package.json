@@ -5,11 +5,13 @@
   "type": "module",
   "main": "dist/cli/index.js",
   "bin": {
-    "kuroneko": "dist/cli/index.js"
+    "kuroneko":    "dist/cli/index.js",
+    "kuroneko-ob": "dist/cli/outer-brain.js"
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli/index.ts",
+    "dev:ob": "tsx src/cli/outer-brain.ts",
     "lint": "eslint src --ext .ts",
     "test": "vitest run"
   },

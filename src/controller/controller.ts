@@ -10,6 +10,9 @@
  * 每次 tick() 执行一个完整阶段，返回 hadWork 供调度器决定退避。
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
+
 import type { LLMAdapter } from '../adapter/index.js';
 import type { IORegistry } from '../io/index.js';
 import type { ToolRegistry } from '../tools/index.js';
@@ -58,36 +61,66 @@ export interface Controller {
 // ── 工厂函数 ──────────────────────────────────────────────────────────────────
 
 export function createController(ctx: ControllerContext, deps: ControllerDeps): Controller {
-  const { agentId, workDir } = ctx;
+  const { agentId, workDir, tempDir } = ctx;
   const { llm, ioRegistry, executorToolRegistry, attributorToolRegistry, memory, mem0, logger, knowledgeStore } = deps;
 
-  const brain = new BrainFS(workDir);
+  const brain          = new BrainFS(workDir);
+  const statusFile     = path.join(tempDir, 'status');
+  const directivesFile = path.join(tempDir, 'directives');
+
+  function syncStatus(): void {
+    try {
+      const state = brain.readState();
+      const milestone = brain.getActiveMilestone();
+      const status = {
+        ts:              new Date().toISOString(),
+        mode:            state.mode,
+        milestone:       milestone ? { id: milestone.id, title: milestone.title } : null,
+        goal_origin_user: brain.readGoalOriginUser(),
+        blocked:         state.mode === 'BLOCKED',
+        block_reason:    state.blockedReason ?? null,
+      };
+      fs.writeFileSync(statusFile, JSON.stringify(status, null, 2), 'utf8');
+    } catch { /* non-critical */ }
+  }
 
   return {
     async tick(): Promise<TickResult> {
       const state = brain.readState();
+
+      // 每轮开始时同步状态供外脑读取
+      syncStatus();
 
       logger.info('controller', {
         event: 'tick.start',
         data: { mode: state.mode, replanCount: state.replanCount },
       });
 
-      // ── BLOCKED 状态：等待外脑 input ─────────────────────────────────────────
+      // ── BLOCKED 状态：等待外脑 input 或 directives ───────────────────────────
       if (state.mode === 'BLOCKED') {
+        // 优先读 input（[NEW_GOAL] 指令或外脑直接指令）
         const input = await safeReadInput(ioRegistry, logger);
-        if (!input) {
-          return { hadWork: false }; // 继续等待，调度器退避
+
+        // 同时读取 directives（BLOCK 解封回复、约束补充）
+        const directives = readAndClearDirectives(directivesFile, logger);
+        const blockResolutionDirective = directives.find(
+          d => d.type === 'feedback' && d.content.startsWith('[BLOCK解封]'),
+        );
+
+        // 如果 input 和 directives 都没有内容，继续等待
+        if (!input && !blockResolutionDirective) {
+          return { hadWork: false };
         }
 
-        // 如果是"目标完成"后的 BLOCKED，input 视为全新任务 → 归档旧 brain，重新规划
-        const isPostComplete = state.blockedReason === '目标完成，等待新目标';
-        if (isPostComplete) {
-          // 归档旧任务的 brain 文件（knowledge/constraints/milestones），从干净状态开始
+        // [NEW_GOAL] 指令或"目标已完成"后的新任务 → 归档旧 brain，重新规划
+        // 注意：[NEW_GOAL] 必须优先于 LLM 解封，否则 goal.md 缺失时 REPLAN 路径不写 goal 会死循环
+        const isPostComplete = state.blockedReason === '目标已完成，等待新目标';
+        const isNewGoalCmd   = !!input?.trimStart().startsWith('[NEW_GOAL]');
+        if (input && (isPostComplete || isNewGoalCmd)) {
           brain.archiveForNewTask();
           logger.info('controller', { event: 'brain.archived.for.new.task', data: { preview: input.slice(0, 80) } });
-          // 将 input 作为全新 goal
           brain.writeGoal(input);
-          state.replanReason = `新任务：${input.slice(0, 100)}`;
+          state.replanReason = isNewGoalCmd ? `新任务指令：${input.slice(0, 100)}` : `新任务：${input.slice(0, 100)}`;
           state.mode = 'DECOMPOSE';
           state.replanCount = 0;
           state.blockedReason = null;
@@ -96,19 +129,35 @@ export function createController(ctx: ControllerContext, deps: ControllerDeps): 
           return { hadWork: true };
         }
 
-        // 方案 C：LLM 判断 CONTINUE vs REPLAN
-        const decision = await resolveBlock(state.blockedReason ?? '', input, llm, logger);
+        // 非新任务 input 或来自 directives 的 BLOCK 解封回复
+        // 优先使用 input，其次用 BLOCK 解封 directive
+        const resolveContent = input ?? (blockResolutionDirective
+          ? blockResolutionDirective.content.replace('[BLOCK解封] 用户回复：', '')
+          : '');
 
-        // 将外脑的解封指令写入 constraints，让后续 Executor/Decomposer 都能看到
-        const humanNote = `\n\n<!-- 外脑解封指令 ${new Date().toISOString()} -->\n[人类指示] ${input}`;
+        if (!resolveContent) return { hadWork: false };
+
+        // 将 directives 中的约束注入 constraints.md（feedback 类不注入）
+        for (const d of directives) {
+          if (d.type === 'constraint' || d.type === 'requirement') {
+            const note = `\n\n<!-- directive ${d.type} ${d.ts} from ${d.from} -->\n[外脑指示] ${d.content}`;
+            brain.appendConstraint(note);
+            logger.info('controller', { event: 'directive.applied', data: { type: d.type, preview: d.content.slice(0, 60) } });
+          }
+        }
+
+        // 方案 C：LLM 判断 CONTINUE vs REPLAN（仅用于真实 BLOCK，非新目标指令）
+        const decision = await resolveBlock(state.blockedReason ?? '', resolveContent, llm, logger);
+
+        const humanNote = `\n\n<!-- 外脑解封指令 ${new Date().toISOString()} -->\n[人类指示] ${resolveContent}`;
         brain.appendConstraint(humanNote);
-        logger.info('controller', { event: 'block.human.note.written', data: { preview: input.slice(0, 80) } });
+        logger.info('controller', { event: 'block.human.note.written', data: { preview: resolveContent.slice(0, 80) } });
 
         if (decision === 'CONTINUE') {
           state.mode = 'EXECUTE';
           state.blockedReason = null;
         } else {
-          state.replanReason = `BLOCK 已解除，外脑指示：${input}`;
+          state.replanReason = `BLOCK 已解除，外脑指示：${resolveContent}`;
           state.mode = 'DECOMPOSE';
         }
         brain.writeState(state);
@@ -120,7 +169,7 @@ export function createController(ctx: ControllerContext, deps: ControllerDeps): 
         const goal = brain.readGoal();
         if (!goal.trim()) {
           logger.error('controller', { event: 'goal.missing', data: {} });
-          await writeOutput(ioRegistry, '[BLOCK] .brain/goal.md 不存在或为空，无法启动内脑。请通过 --goal 或 --goal-file 参数指定目标。', logger);
+          await writeBlockOutput(ioRegistry, '.brain/goal.md 不存在或为空，无法启动内脑。请通过 --goal 或 --goal-file 参数指定目标。', null, logger);
           state.mode = 'BLOCKED';
           state.blockedReason = 'goal.md 缺失';
           brain.writeState(state);
@@ -130,9 +179,8 @@ export function createController(ctx: ControllerContext, deps: ControllerDeps): 
         const result = await runDecomposer(brain, state.replanReason, llm, logger, knowledgeStore);
 
         if (!result.ok) {
-          // Decomposer 失败两次 → BLOCK
           logger.error('controller', { event: 'decompose.failed', data: { error: result.error } });
-          await writeOutput(ioRegistry, `[BLOCK] Decomposer 无法生成有效里程碑：${result.error}`, logger);
+          await writeBlockOutput(ioRegistry, `Decomposer 无法生成有效里程碑：${result.error}`, brain.readGoalOriginUser(), logger);
           state.mode = 'BLOCKED';
           state.blockedReason = `Decomposer 失败：${result.error}`;
           brain.writeState(state);
@@ -158,6 +206,18 @@ export function createController(ctx: ControllerContext, deps: ControllerDeps): 
           state.mode = 'DECOMPOSE';
           brain.writeState(state);
           return { hadWork: true };
+        }
+
+        // 消费 directives（约束/需求 → 注入 constraints.md；feedback 仅记录）
+        const execDirectives = readAndClearDirectives(directivesFile, logger);
+        for (const d of execDirectives) {
+          if (d.type === 'constraint' || d.type === 'requirement') {
+            const note = `\n\n<!-- directive ${d.type} ${d.ts} from ${d.from} -->\n[外脑指示] ${d.content}`;
+            brain.appendConstraint(note);
+            logger.info('controller', { event: 'directive.applied', data: { type: d.type, preview: d.content.slice(0, 60) } });
+          } else {
+            logger.info('controller', { event: 'directive.feedback', data: { from: d.from, preview: d.content.slice(0, 60) } });
+          }
         }
 
         const activeMilestone = brain.getActiveMilestone();
@@ -251,7 +311,6 @@ export function createController(ctx: ControllerContext, deps: ControllerDeps): 
               brain.writeState(state);
               logger.info('controller', { event: 'milestone.next', data: { completedId: execCtx.activeMilestone.id } });
             } else {
-              // 所有里程碑完成
               await handleAllCompleted(brain, ioRegistry, memory, mem0, agentId, logger, knowledgeStore, workDir);
             }
             break;
@@ -261,8 +320,8 @@ export function createController(ctx: ControllerContext, deps: ControllerDeps): 
             state.replanCount += 1;
             if (state.replanCount > maxReplan) {
               // 连续 REPLAN 超限 → 升级为 BLOCK
-              const blockMsg = `[BLOCK] 已连续 REPLAN ${state.replanCount} 次（上限 ${maxReplan}），无法自主突破。最后原因：${attrResult.reason}`;
-              await writeOutput(ioRegistry, blockMsg, logger);
+              const replanReason = `已连续 REPLAN ${state.replanCount} 次（上限 ${maxReplan}），无法自主突破。最后原因：${attrResult.reason}`;
+              await writeBlockOutput(ioRegistry, replanReason, brain.readGoalOriginUser(), logger);
               state.mode = 'BLOCKED';
               state.blockedReason = `连续 REPLAN 超限：${attrResult.reason}`;
               brain.writeState(state);
@@ -277,8 +336,8 @@ export function createController(ctx: ControllerContext, deps: ControllerDeps): 
           }
 
           case 'BLOCK': {
-            const blockMsg = `[BLOCK] ${attrResult.reason}`;
-            await writeOutput(ioRegistry, blockMsg, logger);
+            const goalOriginUser = brain.readGoalOriginUser();
+            await writeBlockOutput(ioRegistry, attrResult.reason, goalOriginUser, logger);
             state.mode = 'BLOCKED';
             state.blockedReason = attrResult.reason;
             state.replanCount = 0; // 重置计数，外脑介入后重新开始
@@ -313,8 +372,10 @@ async function handleAllCompleted(
 ): Promise<void> {
   const goal = brain.readGoal();
   const milestones = brain.readMilestones();
-  const report = [
-    `[COMPLETE] 所有里程碑已完成。`,
+  const goalOriginUser = brain.readGoalOriginUser();
+
+  const reportText = [
+    `所有里程碑已完成。`,
     ``,
     `## 最终目标`,
     goal,
@@ -323,12 +384,12 @@ async function handleAllCompleted(
     milestones,
   ].join('\n');
 
-  await writeOutput(ioRegistry, report, logger);
+  await writeCompleteOutput(ioRegistry, reportText, goalOriginUser, logger);
   memory.appendDailyLog(`[完成] 目标达成，输出报告`);
   await safeMem0Add(mem0, `目标已完成: ${goal.slice(0, 200)}`, agentId, logger);
 
   // 进入 BLOCKED 状态等待新 goal（不清除 goal.md，保留历史记录）
-  // 不重置为 DECOMPOSE，否则下个 tick 会用同一 goal 重新开始
+  // 注意：blockedReason 字符串必须与 controller BLOCKED 处理器中的 isPostComplete 判断一致
   brain.writeState({ mode: 'BLOCKED', replanCount: 0, replanReason: null, blockedReason: '目标已完成，等待新目标' });
   logger.info('controller', { event: 'all.complete', data: {} });
 
@@ -376,6 +437,44 @@ async function writeOutput(ioRegistry: IORegistry, content: string, logger: Logg
   }
 }
 
+/**
+ * 写入结构化 BLOCK 输出（JSON），供外脑 push-loop 解析。
+ * 向后兼容：同时写纯文本前缀（[BLOCK]）。
+ */
+async function writeBlockOutput(
+  ioRegistry: IORegistry,
+  reason: string,
+  targetUser: string | null,
+  logger: Logger,
+): Promise<void> {
+  const output = JSON.stringify({
+    type:        'BLOCK',
+    message:     reason,
+    question:    reason,
+    target_user: targetUser ?? undefined,
+    ts:          new Date().toISOString(),
+  });
+  await writeOutput(ioRegistry, output, logger);
+}
+
+/**
+ * 写入结构化 COMPLETE 输出（JSON），供外脑 push-loop 解析。
+ */
+async function writeCompleteOutput(
+  ioRegistry: IORegistry,
+  message: string,
+  targetUser: string | null,
+  logger: Logger,
+): Promise<void> {
+  const output = JSON.stringify({
+    type:        'COMPLETE',
+    message,
+    target_user: targetUser ?? undefined,
+    ts:          new Date().toISOString(),
+  });
+  await writeOutput(ioRegistry, output, logger);
+}
+
 async function safeArchive(
   store: KnowledgeStore | undefined,
   brain: BrainFS,
@@ -392,6 +491,47 @@ async function safeArchive(
   } catch (e) {
     logger.warn('archive', { event: 'archive.error', data: { error: String(e) } });
   }
+}
+
+// ── directives 文件工具 ───────────────────────────────────────────────────────
+
+interface Directive {
+  ts:      string;
+  type:    'constraint' | 'requirement' | 'feedback';
+  content: string;
+  from:    string;
+}
+
+/**
+ * 读取并清空 directives 文件。
+ * 返回解析成功的所有 directive 条目（失败的行跳过）。
+ */
+function readAndClearDirectives(filePath: string, logger: Logger): Directive[] {
+  if (!fs.existsSync(filePath)) return [];
+  let raw = '';
+  try {
+    raw = fs.readFileSync(filePath, 'utf8');
+    fs.writeFileSync(filePath, '', 'utf8'); // 消费后立即清空
+  } catch (e) {
+    logger.warn('controller', { event: 'directives.read.error', data: { error: String(e) } });
+    return [];
+  }
+
+  const results: Directive[] = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const d = JSON.parse(trimmed) as Directive;
+      if (d.type && d.content) {
+        results.push(d);
+        logger.info('controller', { event: 'directive.consumed', data: { type: d.type, from: d.from, preview: d.content.slice(0, 60) } });
+      }
+    } catch {
+      logger.warn('controller', { event: 'directive.parse.error', data: { line: trimmed.slice(0, 80) } });
+    }
+  }
+  return results;
 }
 
 async function safeMem0Add(

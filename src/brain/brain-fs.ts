@@ -106,6 +106,17 @@ export class BrainFS {
   readGoal(): string      { return this.read('goal.md'); }
   writeGoal(c: string)    { this.write('goal.md', c); }
 
+  /**
+   * 读取发起当前目标的用户 ID（由外脑 set_goal 工具写入 goal.md 头部）。
+   * 格式：第一行 "origin_user: <userId>" 后跟空行和目标内容。
+   * 未找到返回 null。
+   */
+  readGoalOriginUser(): string | null {
+    const goal = this.readGoal();
+    const match = goal.match(/^origin_user:\s*(\S+)/m);
+    return match ? (match[1] ?? null) : null;
+  }
+
   readMilestones(): string       { return this.read('milestones.md'); }
   writeMilestones(c: string)     { this.write('milestones.md', c); }
 

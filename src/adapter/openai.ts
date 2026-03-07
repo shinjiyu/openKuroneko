@@ -28,16 +28,88 @@ interface OAIStreamChunk {
 /** 单次 LLM HTTP 请求超时（毫秒）。默认 120s，可通过 LLM_TIMEOUT_MS 环境变量覆盖。 */
 const LLM_TIMEOUT_MS = parseInt(process.env['LLM_TIMEOUT_MS'] ?? '120000', 10);
 
+// ── Retry 配置 ────────────────────────────────────────────────────────────────
+
+/** 可自动重试的 HTTP 状态码（速率限制 & 服务端瞬时错误）。 */
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+
+/** 最大重试次数（不含首次调用）。 */
+const LLM_MAX_RETRIES = parseInt(process.env['LLM_MAX_RETRIES'] ?? '4', 10);
+
+/**
+ * 计算第 attempt 次（0-indexed）重试前的等待时间（毫秒）。
+ *
+ * - 429 速率限制：初始 10s，指数退避，上限 120s
+ * - 5xx 服务端错误：初始 2s，指数退避，上限 30s
+ *
+ * 若响应头含 Retry-After，则取其值与计算值的较大者。
+ */
+function calcRetryDelay(status: number, attempt: number, retryAfterHeader: string | null): number {
+  const base   = status === 429 ? 10_000 : 2_000;
+  const cap    = status === 429 ? 120_000 : 30_000;
+  const jitter = Math.random() * 1000;                     // ±1s 抖动
+  let delay  = Math.min(base * Math.pow(2, attempt), cap) + jitter;
+
+  // 优先尊重服务端 Retry-After 指示（秒 → 毫秒）
+  if (retryAfterHeader) {
+    const headerSec = parseInt(retryAfterHeader, 10);
+    if (!isNaN(headerSec) && headerSec > 0) {
+      delay = Math.max(delay, headerSec * 1000);
+    }
+  }
+  return delay;
+}
+
+/**
+ * 带指数退避重试的 fetch 封装。
+ * 遇到 RETRYABLE_STATUSES 中的状态码时自动等待并重试，超出次数后抛出错误。
+ */
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  label: string,
+): Promise<Response> {
+  for (let attempt = 0; attempt <= LLM_MAX_RETRIES; attempt++) {
+    const res = await fetch(url, init);
+    if (res.ok) return res;
+
+    const isRetryable = RETRYABLE_STATUSES.has(res.status);
+    // 非重试状态码，或已超出重试次数 → 直接抛出
+    if (!isRetryable || attempt >= LLM_MAX_RETRIES) {
+      const body = await res.text();
+      throw new Error(`${label} error ${res.status}: ${body}`);
+    }
+
+    const retryAfter = res.headers.get('Retry-After');
+    // 必须消耗响应体，否则连接不会被释放
+    await res.text();
+
+    const waitMs = calcRetryDelay(res.status, attempt, retryAfter);
+    console.warn(
+      `[llm-retry] HTTP ${res.status} (${label}), attempt ${attempt + 1}/${LLM_MAX_RETRIES}, ` +
+      `waiting ${Math.round(waitMs / 1000)}s before retry…`,
+    );
+    await new Promise<void>((r) => setTimeout(r, waitMs));
+  }
+  throw new Error(`${label} failed after ${LLM_MAX_RETRIES} retries`);
+}
+
 // ── Adapter factory ───────────────────────────────────────────────────────────
 
 export function createOpenAIAdapter(options?: {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  /**
+   * 附加到请求 body 的额外参数。
+   * 例如 ZhipuAI 关闭思考：{ enable_thinking: false }
+   */
+  extraBody?: Record<string, unknown>;
 }): LLMAdapter {
   const apiKey  = options?.apiKey  ?? process.env['OPENAI_API_KEY']  ?? '';
   const baseUrl = options?.baseUrl ?? process.env['OPENAI_BASE_URL'] ?? 'https://api.openai.com/v1';
   const model   = options?.model   ?? process.env['OPENAI_MODEL']    ?? 'gpt-4o';
+  const extraBody = options?.extraBody ?? {};
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -53,6 +125,7 @@ export function createOpenAIAdapter(options?: {
     const body: Record<string, unknown> = {
       model,
       stream,
+      ...extraBody,
       messages: [
         { role: 'system', content: systemPrompt },
         ...messages,
@@ -71,16 +144,16 @@ export function createOpenAIAdapter(options?: {
     messages: Message[],
     tools?: object[]
   ): Promise<LLMResult> {
-    const res = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: buildBody(systemPrompt, messages, tools, false),
-      signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
-    });
-
-    if (!res.ok) {
-      throw new Error(`OpenAI API error ${res.status}: ${await res.text()}`);
-    }
+    const res = await fetchWithRetry(
+      `${baseUrl}/chat/completions`,
+      {
+        method: 'POST',
+        headers,
+        body: buildBody(systemPrompt, messages, tools, false),
+        signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
+      },
+      'chat',
+    );
 
     const data = (await res.json()) as OAIResponse;
     const choice = data.choices[0];
@@ -101,16 +174,16 @@ export function createOpenAIAdapter(options?: {
     messages: Message[],
     onChunk: (chunk: StreamChunk) => void
   ): Promise<LLMResult> {
-    const res = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: buildBody(systemPrompt, messages, undefined, true),
-      signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
-    });
-
-    if (!res.ok) {
-      throw new Error(`OpenAI stream error ${res.status}: ${await res.text()}`);
-    }
+    const res = await fetchWithRetry(
+      `${baseUrl}/chat/completions`,
+      {
+        method: 'POST',
+        headers,
+        body: buildBody(systemPrompt, messages, undefined, true),
+        signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
+      },
+      'stream',
+    );
     if (!res.body) throw new Error('No response body for streaming');
 
     const reader = res.body.getReader();

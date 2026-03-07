@@ -66,33 +66,38 @@ export async function runDecomposer(
 
   logger.info('decomposer', { event: 'decompose.start', data: { reason } });
 
-  let attempt = 0;
-  while (attempt < 2) {
-    attempt++;
+  // 格式校验失败时最多重试 2 次（LLM 错误已在 adapter 层带退避重试，此处不再重试）
+  const FORMAT_RETRIES = 2;
+  for (let attempt = 1; attempt <= FORMAT_RETRIES; attempt++) {
+    let content: string;
     try {
       const result = await llm.chat(DECOMPOSE_SYSTEM, [{ role: 'user', content: userMessage }], []);
-      const content = result.content?.trim() ?? '';
-
-      // 基本格式校验：至少有一条 [Mx] [Active|Pending|Completed] 行
-      if (!/\[M\d+\]\s+\[(Active|Pending|Completed)\]/i.test(content)) {
-        logger.warn('decomposer', {
-          event: 'decompose.format.invalid',
-          data: { attempt, preview: content.slice(0, 200) },
-        });
-        if (attempt < 2) continue; // 重试一次
-        return { ok: false, milestonesContent: '', error: 'Decomposer 输出格式不合法（重试后仍失败）' };
-      }
-
-      logger.info('decomposer', {
-        event: 'decompose.done',
-        data: { lines: content.split('\n').length },
-      });
-      return { ok: true, milestonesContent: content };
+      content = result.content?.trim() ?? '';
     } catch (e) {
+      // LLM adapter 已穷尽所有重试（含退避），直接报 BLOCK
       logger.error('decomposer', { event: 'decompose.llm.error', data: { error: String(e) } });
-      if (attempt < 2) continue;
       return { ok: false, milestonesContent: '', error: String(e) };
     }
+
+    // 基本格式校验：至少有一条 [Mx] [Active|Pending|Completed] 行
+    if (!/\[M\d+\]\s+\[(Active|Pending|Completed)\]/i.test(content)) {
+      logger.warn('decomposer', {
+        event: 'decompose.format.invalid',
+        data: { attempt, preview: content.slice(0, 200) },
+      });
+      if (attempt < FORMAT_RETRIES) {
+        // 格式错误：等 2s 再请求一次（通常是模型输出不稳定）
+        await new Promise<void>((r) => setTimeout(r, 2_000));
+        continue;
+      }
+      return { ok: false, milestonesContent: '', error: 'Decomposer 输出格式不合法（重试后仍失败）' };
+    }
+
+    logger.info('decomposer', {
+      event: 'decompose.done',
+      data: { lines: content.split('\n').length },
+    });
+    return { ok: true, milestonesContent: content };
   }
 
   return { ok: false, milestonesContent: '', error: '未知错误' };

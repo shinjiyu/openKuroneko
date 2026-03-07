@@ -1,0 +1,1133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kuroneko Chat</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0f1117;
+    --bg2:       #1a1d27;
+    --bg3:       #22263a;
+    --border:    #2e3354;
+    --accent:    #6c63ff;
+    --accent2:   #a78bfa;
+    --text:      #e2e8f0;
+    --text2:     #8892a4;
+    --user-bg:   #2d3748;
+    --agent-bg:  #1e2235;
+    --agent-acc: #6c63ff;
+    --green:     #4ade80;
+    --orange:    #fb923c;
+    --red:       #f87171;
+    --radius:    12px;
+    --sidebar:   240px;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100dvh;
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  #sidebar {
+    width: var(--sidebar);
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+
+  #agent-header {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  #agent-avatar {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; flex-shrink: 0;
+  }
+
+  #agent-info { flex: 1; min-width: 0; }
+  #agent-name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #agent-status { font-size: 11px; color: var(--text2); margin-top: 2px; display: flex; align-items: center; gap: 4px; }
+  #status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+  #status-dot.blocked { background: var(--orange); }
+  #status-dot.offline { background: var(--text2); }
+
+  #nav-section { padding: 12px 12px 4px; font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; }
+
+  .nav-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; margin: 1px 6px;
+    border-radius: 8px; cursor: pointer;
+    font-size: 13px; color: var(--text2);
+    transition: background 0.15s, color 0.15s;
+    user-select: none;
+  }
+  .nav-item:hover { background: var(--bg3); color: var(--text); }
+  .nav-item.active { background: rgba(108,99,255,0.15); color: var(--accent2); }
+  .nav-item .icon { font-size: 15px; width: 20px; text-align: center; flex-shrink: 0; }
+  .nav-item .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nav-item .badge {
+    background: var(--accent); color: #fff;
+    font-size: 10px; padding: 1px 5px; border-radius: 10px;
+    font-weight: 700; min-width: 16px; text-align: center;
+  }
+
+  #user-footer {
+    margin-top: auto;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  #user-avatar {
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--bg3); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; flex-shrink: 0; font-weight: 600;
+  }
+  #user-name { font-size: 13px; font-weight: 500; }
+  #user-role { font-size: 11px; color: var(--text2); }
+
+  /* ── Main ── */
+  #main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  #chat-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+    background: var(--bg2);
+  }
+  #chat-title { font-weight: 600; font-size: 15px; }
+  #chat-subtitle { font-size: 12px; color: var(--text2); margin-top: 2px; }
+
+  #messages {
+    flex: 1; overflow-y: auto;
+    padding: 20px;
+    display: flex; flex-direction: column; gap: 4px;
+    scroll-behavior: smooth;
+  }
+  #messages::-webkit-scrollbar { width: 4px; }
+  #messages::-webkit-scrollbar-track { background: transparent; }
+  #messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .msg-group { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; }
+  .msg-group .sender {
+    font-size: 11px; color: var(--text2); margin-bottom: 4px;
+    padding: 0 4px;
+  }
+  .msg-group.self .sender { text-align: right; }
+
+  .msg-row {
+    display: flex; align-items: flex-end; gap: 8px;
+  }
+  .msg-group.self .msg-row { flex-direction: row-reverse; }
+
+  .bubble {
+    max-width: min(520px, 75%);
+    padding: 10px 14px;
+    border-radius: 16px;
+    font-size: 14px;
+    line-height: 1.55;
+    word-break: break-word;
+    white-space: pre-wrap;
+  }
+  .bubble.agent {
+    background: var(--agent-bg);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 4px;
+  }
+  .bubble.user {
+    background: var(--accent);
+    color: #fff;
+    border-bottom-right-radius: 4px;
+  }
+  .bubble.peer {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 4px;
+    color: var(--text);
+  }
+  .bubble.system {
+    background: transparent;
+    border: 1px dashed var(--border);
+    color: var(--text2);
+    font-size: 12px;
+    font-style: italic;
+    max-width: 100%;
+    text-align: center;
+    border-radius: 8px;
+  }
+
+  .time { font-size: 10px; color: var(--text2); flex-shrink: 0; padding-bottom: 2px; }
+  .msg-group.self .time { order: -1; }
+
+  .typing-indicator {
+    display: none;
+    padding: 10px 14px;
+    background: var(--agent-bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    border-bottom-left-radius: 4px;
+    width: fit-content;
+  }
+  .typing-indicator.show { display: block; }
+  .dot-flashing {
+    display: flex; gap: 4px; align-items: center;
+    height: 16px;
+  }
+  .dot-flashing span {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent2);
+    animation: dotFlash 1.4s infinite ease-in-out;
+  }
+  .dot-flashing span:nth-child(2) { animation-delay: 0.2s; }
+  .dot-flashing span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes dotFlash { 0%,80%,100% { opacity:0.2; transform:scale(0.8); } 40% { opacity:1; transform:scale(1); } }
+
+  /* ── Input ── */
+  #input-area {
+    padding: 14px 20px;
+    border-top: 1px solid var(--border);
+    background: var(--bg2);
+    display: flex; gap: 10px; align-items: flex-end;
+  }
+
+  #msg-input {
+    flex: 1;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    color: var(--text);
+    font-size: 14px;
+    resize: none;
+    min-height: 42px;
+    max-height: 160px;
+    outline: none;
+    font-family: inherit;
+    line-height: 1.5;
+    transition: border-color 0.15s;
+  }
+  #msg-input:focus { border-color: var(--accent); }
+  #msg-input::placeholder { color: var(--text2); }
+
+  #send-btn {
+    width: 42px; height: 42px;
+    border-radius: 10px;
+    background: var(--accent);
+    border: none; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 18px;
+    flex-shrink: 0;
+    transition: background 0.15s, transform 0.1s;
+  }
+  #send-btn:hover { background: var(--accent2); }
+  #send-btn:active { transform: scale(0.95); }
+  #send-btn:disabled { background: var(--border); cursor: not-allowed; }
+
+  /* ── Login overlay ── */
+  #login-overlay {
+    position: fixed; inset: 0;
+    background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100;
+  }
+  #login-box {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 36px 40px;
+    width: min(380px, 90vw);
+    text-align: center;
+  }
+  #login-box .logo { font-size: 40px; margin-bottom: 12px; }
+  #login-box h2 { font-size: 20px; margin-bottom: 4px; }
+  #login-box p { color: var(--text2); font-size: 13px; margin-bottom: 24px; }
+  #token-input {
+    width: 100%; padding: 10px 14px;
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 10px; color: var(--text);
+    font-size: 14px; outline: none;
+    margin-bottom: 12px;
+    transition: border-color 0.15s;
+    text-align: center; letter-spacing: 2px;
+  }
+  #token-input:focus { border-color: var(--accent); }
+  #login-btn {
+    width: 100%; padding: 10px;
+    background: var(--accent); border: none;
+    border-radius: 10px; color: #fff;
+    font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: background 0.15s;
+  }
+  #login-btn:hover { background: var(--accent2); }
+  #login-error { color: var(--red); font-size: 12px; margin-top: 8px; display: none; }
+
+  /* ── Status bar (inner brain) ── */
+  #inner-status-bar {
+    padding: 6px 20px;
+    background: rgba(108,99,255,0.08);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px; color: var(--text2);
+    display: flex; align-items: center; gap: 6px;
+    display: none;
+  }
+  #inner-status-bar.show { display: flex; }
+  #inner-status-bar.blocked { background: rgba(251,146,60,0.1); }
+
+  /* ── Inner Brain sidebar section ── */
+  .nav-section { padding: 12px 12px 4px; font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; }
+
+  .ib-indicator {
+    font-size: 10px; padding: 1px 6px; border-radius: 8px;
+    background: var(--bg3); color: var(--text2); border: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .ib-indicator.running { background: rgba(74,222,128,0.12); color: var(--green); border-color: rgba(74,222,128,0.4); }
+  .ib-indicator.blocked { background: rgba(251,146,60,0.12); color: var(--orange); border-color: rgba(251,146,60,0.4); }
+  .ib-indicator.idle    { background: var(--bg3); color: var(--text2); }
+
+  /* ── Inner Brain Monitor Panel ── */
+  #ib-panel {
+    display: none; flex-direction: column; flex: 1; overflow: hidden;
+  }
+  #ib-panel.show { display: flex; }
+
+  #ib-panel-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+    display: flex; align-items: center; gap: 10px;
+    flex-shrink: 0;
+  }
+  #ib-panel-header .title { font-weight: 600; font-size: 15px; flex: 1; }
+  #ib-back-btn {
+    background: transparent; border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text2); font-size: 12px;
+    padding: 4px 12px; cursor: pointer; transition: color 0.15s, border-color 0.15s;
+  }
+  #ib-back-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  #ib-status-card {
+    padding: 14px 20px; border-bottom: 1px solid var(--border);
+    background: var(--bg2); flex-shrink: 0;
+  }
+  #ib-mode-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .ib-badge {
+    padding: 3px 9px; border-radius: 6px; font-size: 11px; font-weight: 700;
+    background: var(--bg3); color: var(--text2); border: 1px solid var(--border);
+  }
+  .ib-badge.running { background: rgba(74,222,128,0.12); color: var(--green); border-color: rgba(74,222,128,0.4); }
+  .ib-badge.blocked { background: rgba(251,146,60,0.12); color: var(--orange); border-color: rgba(251,146,60,0.4); }
+  .ib-badge.complete { background: rgba(108,99,255,0.12); color: var(--accent2); border-color: rgba(108,99,255,0.4); }
+
+  #ib-milestone-text { font-size: 13px; color: var(--text); flex: 1; }
+  #ib-last-ts { font-size: 11px; color: var(--text2); }
+
+  #ib-milestone-list { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+  .ib-ms-item {
+    display: flex; align-items: baseline; gap: 8px; padding: 5px 0;
+    border-bottom: 1px solid var(--border); font-size: 12px;
+  }
+  .ib-ms-item:last-child { border-bottom: none; }
+  .ib-ms-id { font-weight: 700; color: var(--text2); min-width: 28px; }
+  .ib-ms-status {
+    font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px;
+    background: var(--bg3); color: var(--text2); min-width: 54px; text-align: center;
+  }
+  .ib-ms-status.completed { background: rgba(74,222,128,0.12); color: var(--green); }
+  .ib-ms-status.active { background: rgba(108,99,255,0.12); color: var(--accent2); }
+  .ib-ms-title { color: var(--text); flex: 1; }
+
+  #ib-block-msg {
+    margin-top: 10px; padding: 8px 12px;
+    background: rgba(251,146,60,0.08); border: 1px solid rgba(251,146,60,0.25);
+    border-radius: 8px; font-size: 12px; color: var(--orange);
+    line-height: 1.5; word-break: break-all;
+  }
+
+  #ib-log-header {
+    padding: 8px 20px; flex-shrink: 0;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; color: var(--text2);
+    background: var(--bg2); border-bottom: 1px solid var(--border);
+  }
+  #ib-log-header .ib-log-count { margin-left: 4px; }
+  #ib-scroll-btn {
+    margin-left: auto; background: transparent; border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text2); font-size: 11px;
+    padding: 2px 8px; cursor: pointer;
+  }
+  #ib-scroll-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  #ib-log-viewer {
+    flex: 1; overflow-y: auto; padding: 10px 20px;
+    font-family: 'SF Mono', 'Fira Code', 'Menlo', monospace;
+    font-size: 11.5px; line-height: 1.7;
+    background: var(--bg);
+  }
+  #ib-log-viewer::-webkit-scrollbar { width: 4px; }
+  #ib-log-viewer::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .ib-log-line {
+    display: flex; gap: 6px; padding: 1px 0;
+    word-break: break-all; flex-wrap: wrap;
+    border-bottom: 1px solid transparent;
+  }
+  .ib-log-line:hover { background: rgba(255,255,255,0.03); }
+  .ib-ts  { color: #4a5568; flex-shrink: 0; font-size: 10.5px; padding-top: 1px; }
+  .ib-lvl { flex-shrink: 0; min-width: 38px; font-weight: 600; }
+  .ib-mod { color: var(--accent2); flex-shrink: 0; }
+  .ib-evt { color: var(--text); }
+  .ib-data { color: var(--text2); font-size: 10.5px; word-break: break-all; width: 100%; padding-left: 130px; }
+  .ib-log-info  .ib-lvl { color: var(--text2); }
+  .ib-log-warn  .ib-lvl { color: var(--orange); }
+  .ib-log-error .ib-lvl { color: var(--red); }
+  .ib-log-debug .ib-lvl { color: #4a5568; }
+
+  /* ── Scrollbar ── */
+  @media (max-width: 600px) {
+    #sidebar { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Login overlay -->
+<div id="login-overlay">
+  <div id="login-box">
+    <div class="logo">🐱</div>
+    <h2>Kuroneko Chat</h2>
+    <p>输入你的访问 Token 登录</p>
+    <input id="token-input" type="password" placeholder="Token" autocomplete="off" spellcheck="false">
+    <button id="login-btn">登录</button>
+    <div id="login-error">Token 无效，请检查后重试</div>
+  </div>
+</div>
+
+<!-- Sidebar -->
+<div id="sidebar">
+  <div id="agent-header">
+    <div id="agent-avatar">🐱</div>
+    <div id="agent-info">
+      <div id="agent-name">Kuroneko</div>
+      <div id="agent-status">
+        <div id="status-dot" class="offline"></div>
+        <span id="status-text">连接中…</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="nav-section">对话</div>
+  <div id="nav-dm" class="nav-item active" onclick="switchThread('dm')">
+    <span class="icon">💬</span>
+    <span class="label">私信</span>
+  </div>
+
+  <div id="rooms-section" style="display:none">
+    <div id="nav-section-rooms" class="nav-section" style="margin-top:8px">群组</div>
+    <div id="rooms-list"></div>
+  </div>
+
+  <!-- 内脑监控入口 -->
+  <div id="ib-sidebar-section">
+    <div class="nav-section" style="margin-top:8px">内脑</div>
+    <div id="ib-nav-list"></div>
+  </div>
+
+  <div id="user-footer">
+    <div id="user-avatar">?</div>
+    <div>
+      <div id="user-name">—</div>
+      <div id="user-role">member</div>
+    </div>
+  </div>
+</div>
+
+<!-- Main chat area -->
+<div id="main">
+  <div id="inner-status-bar">
+    <span>🧠</span>
+    <span id="inner-status-text">内脑状态：未知</span>
+  </div>
+
+  <div id="chat-header">
+    <div>
+      <div id="chat-title">私信</div>
+      <div id="chat-subtitle" style="display:none"></div>
+    </div>
+  </div>
+
+  <div id="messages">
+    <div class="msg-group">
+      <div class="msg-row">
+        <div class="bubble system">欢迎使用 Kuroneko Chat ✨</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 内脑监控面板（替换消息区） -->
+  <div id="ib-panel">
+    <div id="ib-panel-header">
+      <span class="title">🧠 内脑监控</span>
+      <button id="ib-back-btn" onclick="closeIbMonitor()">← 返回对话</button>
+    </div>
+    <div id="ib-status-card">
+      <div id="ib-mode-row">
+        <span id="ib-mode-badge" class="ib-badge">—</span>
+        <span id="ib-milestone-text">内脑未启动</span>
+        <span id="ib-last-ts"></span>
+      </div>
+      <div id="ib-block-msg" style="display:none"></div>
+      <div id="ib-milestone-list" style="display:none"></div>
+    </div>
+    <div id="ib-log-header">
+      <span>📋 日志</span>
+      <span id="ib-log-count" class="ib-log-count"></span>
+      <button id="ib-scroll-btn" onclick="ibScrollBottom()">↓ 底部</button>
+    </div>
+    <div id="ib-log-viewer"><div style="color:var(--text2);padding:8px 0">暂无日志</div></div>
+  </div>
+
+  <div id="typing-row" style="padding: 0 20px 8px; display:none">
+    <div class="typing-indicator" id="typing">
+      <div class="dot-flashing"><span></span><span></span><span></span></div>
+    </div>
+  </div>
+
+  <div id="input-area">
+    <textarea id="msg-input" placeholder="发消息… (Enter 发送，Shift+Enter 换行)" rows="1"></textarea>
+    <button id="send-btn" title="发送">↑</button>
+  </div>
+</div>
+
+<script>
+// ── 状态 ──────────────────────────────────────────────────────────────────────
+let TOKEN       = '';
+let USER_ID     = '';
+let DISPLAY     = '';
+let ROOMS       = [];
+let currentRoom = null;   // null = DM, string = room_id
+let es          = null;   // EventSource
+let unread      = {};     // room_id → count
+let ibLastLogTs = '';     // 最后一条日志的 ts，用于去重判断
+
+// 每个 thread 独立的消息列表
+// key: threadId（"dm" 或 room_id），value: HTML string
+const threadMessages = {};
+// 每个 thread 独立的 lastSender 状态
+const threadLastSender = {};
+
+// ── 工具 ──────────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+
+function fmtTime(ts) {
+  const d = new Date(ts);
+  return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+}
+
+function autoGrow(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+}
+
+let _suppressScroll = false;
+function scrollBottom() {
+  if (_suppressScroll) return;
+  const m = $('messages');
+  m.scrollTop = m.scrollHeight;
+}
+
+// ── Token 获取（URL ?token= 或 输入框）──────────────────────────────────────
+function getTokenFromUrl() {
+  return new URLSearchParams(location.search).get('token') || '';
+}
+
+// ── 登录 ──────────────────────────────────────────────────────────────────────
+async function tryLogin(token) {
+  try {
+    const res = await fetch('/webchat/me', {
+      headers: { Authorization: 'Bearer ' + token }
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch { return null; }
+}
+
+async function login(token) {
+  const me = await tryLogin(token);
+  if (!me) {
+    $('login-error').style.display = 'block';
+    return;
+  }
+
+  TOKEN    = token;
+  USER_ID  = me.user_id;
+  DISPLAY  = me.display_name || me.user_id;
+
+  // 更新 URL（不刷新页面）
+  const url = new URL(location.href);
+  url.searchParams.set('token', token);
+  history.replaceState({}, '', url);
+
+  $('login-overlay').style.display = 'none';
+  $('user-avatar').textContent = DISPLAY[0].toUpperCase();
+  $('user-name').textContent   = DISPLAY;
+
+  await loadRooms();
+  connectSse();
+  startStatusPoll();
+  await initIbNav();
+}
+
+// ── 加载房间列表 ──────────────────────────────────────────────────────────────
+async function loadRooms() {
+  try {
+    const res = await fetch('/webchat/rooms', { headers: { Authorization: 'Bearer ' + TOKEN } });
+    const data = await res.json();
+    ROOMS = data.rooms || [];
+  } catch { ROOMS = []; }
+
+  const list = $('rooms-list');
+  list.innerHTML = '';
+
+  if (ROOMS.length > 0) {
+    $('rooms-section').style.display = 'block';
+    ROOMS.forEach(r => {
+      const el = document.createElement('div');
+      el.className = 'nav-item';
+      el.id = 'nav-room-' + r.room_id;
+      el.innerHTML = `<span class="icon">👥</span><span class="label">${r.name || r.room_id}</span><span class="badge" id="badge-${r.room_id}" style="display:none">0</span>`;
+      el.onclick = () => switchThread(r.room_id);
+      list.appendChild(el);
+    });
+  }
+}
+
+// ── 当前 thread key ───────────────────────────────────────────────────────────
+function threadKey() {
+  return currentRoom === null ? 'dm' : currentRoom;
+}
+
+// ── 保存 / 恢复消息区域 ───────────────────────────────────────────────────────
+function saveMessages() {
+  threadMessages[threadKey()]    = $('messages').innerHTML;
+  threadLastSender[threadKey()]  = lastSender;
+}
+
+function restoreMessages(key) {
+  const msgs = $('messages');
+  if (threadMessages[key] !== undefined) {
+    msgs.innerHTML = threadMessages[key];
+    lastSender     = threadLastSender[key] ?? null;
+  } else {
+    msgs.innerHTML = `<div class="msg-group"><div class="msg-row"><div class="bubble system">欢迎使用 Kuroneko Chat ✨</div></div></div>`;
+    lastSender     = null;
+  }
+  scrollBottom();
+}
+
+// ── 切换会话（DM / 群组）────────────────────────────────────────────────────
+function switchThread(roomId) {
+  // 保存当前 thread 消息
+  saveMessages();
+
+  currentRoom = roomId === 'dm' ? null : roomId;
+
+  document.querySelectorAll('.nav-item').forEach(e => e.classList.remove('active'));
+  if (currentRoom === null) {
+    $('nav-dm').classList.add('active');
+    $('chat-title').textContent = '私信';
+    $('chat-subtitle').style.display = 'none';
+    $('msg-input').placeholder = '发消息… (Enter 发送，Shift+Enter 换行)';
+  } else {
+    const room = ROOMS.find(r => r.room_id === currentRoom);
+    const el = $('nav-room-' + currentRoom);
+    if (el) el.classList.add('active');
+    $('chat-title').textContent = room ? room.name : currentRoom;
+    $('chat-subtitle').textContent = '群组';
+    $('chat-subtitle').style.display = 'block';
+    $('msg-input').placeholder = `在 ${room?.name || currentRoom} 中发言…（@Kuroneko 可呼叫 agent）`;
+
+    // 清除未读角标
+    unread[currentRoom] = 0;
+    const badge = $('badge-' + currentRoom);
+    if (badge) badge.style.display = 'none';
+  }
+
+  // 恢复新 thread 的消息历史
+  restoreMessages(threadKey());
+
+  // 重新订阅 SSE
+  connectSse();
+}
+
+// ── SSE 连接 ─────────────────────────────────────────────────────────────────
+let _sseReconnectTimer = null;
+
+function connectSse() {
+  if (_sseReconnectTimer) { clearTimeout(_sseReconnectTimer); _sseReconnectTimer = null; }
+  if (es) { es.close(); es = null; }
+
+  const roomParam = currentRoom ? `&room=${encodeURIComponent(currentRoom)}` : '';
+  // 用局部变量持有本次 EventSource，避免 onerror 异步触发时误关新连接
+  const thisEs = new EventSource(`/webchat/events?token=${encodeURIComponent(TOKEN)}${roomParam}`);
+  es = thisEs;
+
+  thisEs.onopen = () => {
+    if (es !== thisEs) return;
+    $('status-dot').className = '';
+    $('status-text').textContent = '已连接';
+  };
+
+  thisEs.onmessage = e => {
+    if (es !== thisEs) return; // stale connection, discard
+    const data = JSON.parse(e.data);
+
+    if (data.type === 'connected') {
+      $('status-dot').className = '';
+      $('status-text').textContent = '已连接';
+      // 检测服务重启：server_boot 变化说明服务端重启过，刷新页面加载最新前端代码
+      if (data.server_boot) {
+        const prev = sessionStorage.getItem('server_boot');
+        if (prev && prev !== String(data.server_boot)) {
+          sessionStorage.setItem('server_boot', String(data.server_boot));
+          location.reload();
+          return;
+        }
+        sessionStorage.setItem('server_boot', String(data.server_boot));
+      }
+      return;
+    }
+
+    // 其他用户发的群聊消息中继
+    if (data.type === 'user_message') {
+      const rid = data.thread_id?.split(':').slice(2).join(':') ?? null;
+      if (rid === currentRoom) {
+        appendMessage('peer', data.display_name || data.user_id, data.content, data.ts || Date.now());
+      } else {
+        // 不在当前 thread，写入对应缓存
+        appendToCache(rid, 'peer', data.display_name || data.user_id, data.content, data.ts || Date.now());
+        bumpUnread(data.thread_id);
+      }
+      return;
+    }
+
+    // agent 回复
+    if (data.content) {
+      hideTyping();
+      // 判断回复是否属于当前正在看的 thread
+      const rid = data.thread_id?.split(':').slice(2).join(':') ?? null;
+      const isCurrentThread =
+        (data.thread_id?.includes(':group:') ? rid === currentRoom : currentRoom === null);
+
+      if (isCurrentThread) {
+        appendMessage('agent', 'Kuroneko', data.content, data.ts || Date.now());
+      } else {
+        appendToCache(rid ?? 'dm', 'agent', 'Kuroneko', data.content, data.ts || Date.now());
+        bumpUnread(data.thread_id);
+      }
+    }
+  };
+
+  thisEs.onerror = () => {
+    // 如果 es 已经被 connectSse 替换成新连接，跳过旧连接的 onerror
+    if (es !== thisEs) return;
+    $('status-dot').className = 'offline';
+    $('status-text').textContent = '连接断开，重连中…';
+    thisEs.close();
+    es = null;
+    if (_sseReconnectTimer) clearTimeout(_sseReconnectTimer);
+    _sseReconnectTimer = setTimeout(connectSse, 3000);
+  };
+}
+
+// ── 消息渲染 ─────────────────────────────────────────────────────────────────
+let lastSender = null;
+
+function appendMessage(role, senderName, content, ts) {
+  const msgs     = $('messages');
+  const isSelf   = role === 'user';
+  const isSystem = role === 'system';
+  // role: 'user' | 'agent' | 'peer' | 'system'
+  // peer = 群里的其他真实用户
+  const bubbleClass = isSelf ? 'user' : (role === 'agent' ? 'agent' : 'peer');
+
+  if (isSystem) {
+    const div = document.createElement('div');
+    div.className = 'msg-group';
+    div.innerHTML = `<div class="msg-row"><div class="bubble system">${escHtml(content)}</div></div>`;
+    msgs.appendChild(div);
+    scrollBottom();
+    return;
+  }
+
+  // 合并同一发送者连续气泡
+  let group;
+  if (lastSender === senderName) {
+    group = msgs.lastElementChild;
+  }
+  if (!group || !group.dataset.sender || group.dataset.sender !== senderName) {
+    group = document.createElement('div');
+    group.className = 'msg-group' + (isSelf ? ' self' : '');
+    group.dataset.sender = senderName;
+    group.innerHTML = `<div class="sender">${escHtml(senderName)} · <span class="ts">${fmtTime(ts)}</span></div>`;
+    msgs.appendChild(group);
+  }
+  lastSender = senderName;
+
+  const row = document.createElement('div');
+  row.className = 'msg-row';
+  row.innerHTML = `<div class="bubble ${bubbleClass}">${escHtml(content)}</div>`;
+  group.appendChild(row);
+
+  scrollBottom();
+}
+
+// 向不在当前视图的 thread 缓存追加消息（不显示）
+function appendToCache(cacheKey, role, senderName, content, ts) {
+  const savedHtml   = $('messages').innerHTML;
+  const savedSender = lastSender;
+
+  _suppressScroll = true;
+  $('messages').innerHTML = threadMessages[cacheKey] ??
+    `<div class="msg-group"><div class="msg-row"><div class="bubble system">欢迎使用 Kuroneko Chat ✨</div></div></div>`;
+  lastSender = threadLastSender[cacheKey] ?? null;
+
+  appendMessage(role, senderName, content, ts);
+
+  threadMessages[cacheKey]   = $('messages').innerHTML;
+  threadLastSender[cacheKey] = lastSender;
+
+  // 还原当前 thread 视图
+  $('messages').innerHTML = savedHtml;
+  lastSender     = savedSender;
+  _suppressScroll = false;
+}
+
+function bumpUnread(threadId) {
+  if (!threadId || !threadId.includes(':group:')) return;
+  const rid = threadId.split(':').slice(2).join(':');
+  if (rid === currentRoom) return; // 当前正在看这个群，不计
+  unread[rid] = (unread[rid] || 0) + 1;
+  const badge = $('badge-' + rid);
+  if (badge) { badge.textContent = unread[rid]; badge.style.display = ''; }
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+}
+
+// ── 发送消息 ──────────────────────────────────────────────────────────────────
+async function sendMsg() {
+  const input = $('msg-input');
+  const content = input.value.trim();
+  if (!content) return;
+
+  input.value = '';
+  autoGrow(input);
+
+  appendMessage('user', DISPLAY, content, Date.now());
+  showTyping();
+
+  const body = { content };
+  if (currentRoom) body.room_id = currentRoom;
+
+  try {
+    const res = await fetch('/webchat/message', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + TOKEN,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      hideTyping();
+      appendMessage('system', '', `发送失败（${res.status}）`, Date.now());
+    }
+  } catch (e) {
+    hideTyping();
+    appendMessage('system', '', '发送失败，请检查连接', Date.now());
+  }
+}
+
+function showTyping() {
+  $('typing-row').style.display = 'block';
+  $('typing').classList.add('show');
+  scrollBottom();
+}
+function hideTyping() {
+  $('typing-row').style.display = 'none';
+  $('typing').classList.remove('show');
+}
+
+// ── 内脑状态轮询（顶部状态栏 + 侧边栏指示） ──────────────────────────────────
+function startStatusPoll() {
+  async function poll() {
+    try {
+      const res = await fetch('/webchat/inner-brain/list', { headers: { Authorization: 'Bearer ' + TOKEN } });
+      if (!res.ok) return;
+      const data = await res.json();
+      const inst  = data.instances?.[0];
+      const s     = inst?.status;
+      const bar   = $('inner-status-bar');
+      const txt   = $('inner-status-text');
+
+      if (!s || s.mode === 'unknown') {
+        bar.classList.remove('show');
+        updateIbNavIndicator(null);
+        return;
+      }
+
+      bar.classList.add('show');
+      if (s.blocked) {
+        bar.classList.add('blocked');
+        $('status-dot').className = 'blocked';
+        $('status-text').textContent = '内脑阻塞';
+        txt.textContent = `内脑阻塞：${(s.block_reason || '未知').slice(0, 80)}`;
+        updateIbNavIndicator('blocked');
+      } else {
+        bar.classList.remove('blocked');
+        $('status-dot').className = '';
+        $('status-text').textContent = '运行中';
+        const ms = s.milestone?.title ? ` · ${s.milestone.title}` : '';
+        txt.textContent = `内脑${ms} (${s.mode})`;
+        updateIbNavIndicator(s.mode);
+      }
+    } catch { /* 忽略 */ }
+  }
+
+  poll();
+  setInterval(poll, 5000);
+}
+
+// ── 内脑侧边栏导航 ────────────────────────────────────────────────────────────
+async function initIbNav() {
+  try {
+    const res = await fetch('/webchat/inner-brain/list', { headers: { Authorization: 'Bearer ' + TOKEN } });
+    if (!res.ok) return;
+    const data = await res.json();
+    const instances = data.instances || [];
+    const list = $('ib-nav-list');
+    list.innerHTML = '';
+
+    if (instances.length === 0) {
+      // 仍然显示一个占位项（内脑未启动）
+      instances.push({ id: '-', status: { mode: 'unknown', blocked: false }, hasLogs: false });
+    }
+
+    instances.forEach((inst, idx) => {
+      const navId = 'nav-ib-' + idx;
+      const el = document.createElement('div');
+      el.className = 'nav-item';
+      el.id = navId;
+      const modeLabel = inst.status.blocked ? 'BLOCKED' : (inst.status.mode || '—');
+      const indClass  = inst.status.blocked ? 'blocked' : (inst.status.mode === 'unknown' ? 'idle' : 'running');
+      el.innerHTML = `<span class="icon">🧠</span><span class="label">内脑实例</span><span id="ib-ind-${idx}" class="ib-indicator ${indClass}">${modeLabel}</span>`;
+      el.onclick = () => openIbMonitor(idx);
+      list.appendChild(el);
+    });
+  } catch { /* ignore */ }
+}
+
+function updateIbNavIndicator(modeOrNull) {
+  const ind = document.getElementById('ib-ind-0');
+  if (!ind) return;
+  if (!modeOrNull) {
+    ind.className = 'ib-indicator idle'; ind.textContent = '—';
+  } else if (modeOrNull === 'blocked') {
+    ind.className = 'ib-indicator blocked'; ind.textContent = 'BLOCKED';
+  } else {
+    ind.className = 'ib-indicator running'; ind.textContent = modeOrNull;
+  }
+}
+
+// ── 内脑监控面板 ──────────────────────────────────────────────────────────────
+let ibPollerTimer  = null;
+
+async function openIbMonitor(_idx) {
+  // 隐藏聊天区域，显示监控面板
+  $('chat-header').style.display = 'none';
+  $('inner-status-bar').style.display = 'none';
+  $('messages').style.display    = 'none';
+  $('typing-row').style.display  = 'none';
+  $('input-area').style.display  = 'none';
+  $('ib-panel').classList.add('show');
+
+  // 激活导航项
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  const navEl = document.getElementById('nav-ib-0');
+  if (navEl) navEl.classList.add('active');
+
+  ibLastLogTs = '';  // 重置去重标记，强制重新渲染
+  await refreshIbData();
+  if (ibPollerTimer) clearInterval(ibPollerTimer);
+  ibPollerTimer = setInterval(refreshIbData, 3000);
+}
+
+function closeIbMonitor() {
+  $('ib-panel').classList.remove('show');
+  $('chat-header').style.display = '';
+  $('messages').style.display    = 'flex';
+  $('input-area').style.display  = 'flex';
+  $('inner-status-bar').style.display = '';
+
+  if (ibPollerTimer) { clearInterval(ibPollerTimer); ibPollerTimer = null; }
+
+  // 恢复聊天导航激活状态
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  if (currentRoom === null) {
+    const dm = $('nav-dm'); if (dm) dm.classList.add('active');
+  } else {
+    const rm = $('nav-room-' + currentRoom); if (rm) rm.classList.add('active');
+  }
+}
+
+async function refreshIbData() {
+  // 状态 + 里程碑
+  try {
+    const r = await fetch('/webchat/inner-brain/list', { headers: { Authorization: 'Bearer ' + TOKEN } });
+    if (r.ok) {
+      const data = await r.json();
+      const inst = data.instances?.[0];
+      renderIbStatus(inst);
+      renderIbMilestones(inst?.milestones || []);
+    }
+  } catch { /* ignore */ }
+  // 日志（取最新 500 条）
+  try {
+    const r = await fetch('/webchat/inner-brain/logs?lines=500', { headers: { Authorization: 'Bearer ' + TOKEN } });
+    if (r.ok) {
+      const data = await r.json();
+      renderIbLogs(data.logs || []);
+    }
+  } catch { /* ignore */ }
+}
+
+function renderIbStatus(inst) {
+  if (!inst) {
+    $('ib-mode-badge').textContent = '—';
+    $('ib-mode-badge').className   = 'ib-badge';
+    $('ib-milestone-text').textContent = '内脑未配置或未启动';
+    $('ib-block-msg').style.display = 'none';
+    return;
+  }
+  const s = inst.status;
+  const badge = $('ib-mode-badge');
+  const mode  = s.mode || '—';
+
+  badge.textContent = mode;
+  badge.className = 'ib-badge' +
+    (s.blocked ? ' blocked' : (mode === 'EXECUTE' || mode === 'PLAN') ? ' running' : (mode === 'COMPLETE') ? ' complete' : '');
+
+  const ms = s.milestone?.title || '';
+  $('ib-milestone-text').textContent = ms || (s.blocked ? '等待解除阻塞' : mode === 'unknown' ? '内脑未启动' : '—');
+
+  if (s.ts) {
+    $('ib-last-ts').textContent = '更新：' + new Date(s.ts).toLocaleTimeString();
+  }
+
+  const blockMsg = $('ib-block-msg');
+  if (s.blocked && s.block_reason) {
+    blockMsg.style.display = 'block';
+    blockMsg.textContent = '⚠ ' + s.block_reason;
+  } else {
+    blockMsg.style.display = 'none';
+  }
+}
+
+function renderIbMilestones(milestones) {
+  const el = $('ib-milestone-list');
+  if (!milestones || !milestones.length) { el.style.display = 'none'; return; }
+  el.style.display = 'flex';
+  el.innerHTML = milestones.map(ms => {
+    const st = (ms.status || '').toLowerCase();
+    const stLabel = st === 'completed' ? '✓ 完成' : st === 'active' ? '▶ 进行中' : st === 'pending' ? '○ 待执行' : ms.status;
+    return `<div class="ib-ms-item">` +
+      `<span class="ib-ms-id">${escHtml(ms.id)}</span>` +
+      `<span class="ib-ms-status ${escHtml(st)}">${escHtml(stLabel)}</span>` +
+      `<span class="ib-ms-title">${escHtml(ms.title)}</span>` +
+      `</div>`;
+  }).join('');
+}
+
+function renderIbLogs(logs) {
+  // 用最后一条日志的 ts 判断是否有新内容（解决"超200行后停止更新"的问题）
+  const lastTs = logs.length > 0 ? String(logs[logs.length - 1]?.ts ?? '') : '';
+  if (lastTs && lastTs === ibLastLogTs) return;
+  ibLastLogTs = lastTs;
+
+  const viewer = $('ib-log-viewer');
+  const wasAtBottom = viewer.scrollHeight - viewer.scrollTop - viewer.clientHeight < 60;
+
+  viewer.innerHTML = logs.map(entry => {
+    if (entry.raw) return `<div class="ib-log-line ib-log-info"><span class="ib-evt">${escHtml(String(entry.raw))}</span></div>`;
+    const ts  = entry.ts  ? new Date(String(entry.ts)).toISOString().slice(11, 19) : '';
+    const lvl = String(entry.level  || 'info');
+    const mod = String(entry.module || '');
+    const evt = String(entry.event  || '');
+    const data = entry.data ? JSON.stringify(entry.data).slice(0, 200) : '';
+    return `<div class="ib-log-line ib-log-${escHtml(lvl)}">` +
+      `<span class="ib-ts">${escHtml(ts)}</span>` +
+      `<span class="ib-lvl">[${escHtml(lvl)}]</span>` +
+      `<span class="ib-mod">[${escHtml(mod)}]</span>` +
+      `<span class="ib-evt">${escHtml(evt)}</span>` +
+      (data ? `<span class="ib-data">${escHtml(data)}</span>` : '') +
+      `</div>`;
+  }).join('') || '<div style="color:var(--text2);padding:8px 0">暂无日志</div>';
+
+  $('ib-log-count').textContent = `${logs.length} 条`;
+  if (wasAtBottom) ibScrollBottom();
+}
+
+function ibScrollBottom() {
+  const v = $('ib-log-viewer');
+  v.scrollTop = v.scrollHeight;
+}
+
+// ── 事件绑定 ──────────────────────────────────────────────────────────────────
+$('send-btn').onclick = sendMsg;
+
+$('msg-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMsg();
+  }
+});
+
+$('msg-input').addEventListener('input', function() { autoGrow(this); });
+
+$('login-btn').onclick = () => login($('token-input').value.trim());
+$('token-input').addEventListener('keydown', e => { if (e.key === 'Enter') $('login-btn').click(); });
+
+// ── 自动登录（token 在 URL 中）────────────────────────────────────────────────
+const urlToken = getTokenFromUrl();
+if (urlToken) {
+  $('token-input').value = urlToken;
+  login(urlToken);
+}
+</script>
+</body>
+</html>
