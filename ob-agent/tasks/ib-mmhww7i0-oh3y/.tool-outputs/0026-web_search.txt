@@ -1,0 +1,39 @@
+[1] Docker Fundamentals Course - Free Courses By Top Teachers
+    URL: alison.com
+    A Free Course On Using Docker To Create Environments For Applications - With Certificate. Expand Your Skills, Reach Your Potential & Boost Your Earnings With An Alison Certificate.
+
+[2] Docker Online Guide - Udemy™ Official Site
+    URL: github.com/PiotrMachowski/Xiaomi-cloud-tokens-extractor
+    Build, test, and deploy Docker apps while learning production-style development workflows. Understand the purpose and theory of Kubernetes by building a complex app.
+
+[3] PiotrMachowski/Xiaomi-cloud-tokens-extractor - GitHub
+    URL: en.techblog.co.il/xiaomi-cloud-token-extractor/
+    This tool retrieves tokens for all devices connected to Xiaomi cloud and encryption keys for BLE devices. It supports two ways of authentication: username (e-mail/ Xiaomi Cloud account ID) & password QR code After logging in you have to select a Xiaomi&#x27;s server region (cn - China, de - Germany etc.). Leave it empty to check all available In return all of your devices connected to account will ...
+
+[4] Xiaomi Cloud Token Extractor - techblog
+    URL: blog.csdn.net/gitblog_00470/article/details/158603047
+    Xiaomi Token Extractor is a Python & Flask powerd, easy to use system that hepls us to easely extrat our Xiaomi devices tokens from the cloud in order to easelly integrate them into our smart home (HA, HB etc&#x27;).
+
+[5] 小米设备令牌提取：智能设备管理与自动化工具全解析-csdn博客
+    URL: hub.docker.com/r/techblog/xiaomi_token_extractor
+    更新工具到最新版本，旧版本可能不支持新的认证机制 问题3： Docker 部署后无法访问 解决方案： 检查容器是否正常运行： docker ps | grep xiaomi - tokens 查看容器日志排查错误： docker logs [容器ID] 确认宿主机防火墙是否开放必要端口 总结
+
+[6] techblog/xiaomi_token_extractor - Docker Image
+    URL: gitee.com/mirrors_PiotrMachowski/Xiaomi-cloud-tokens-extractor
+    Xiaomi Token Extractor is a Python & Flask ⁠ powerd, easy to use system that hepls us to easely extrat our Xiaomi devices tokens from the cloud in order to easelly integrate them into our smart home (HA, HB etc&#x27;).
+
+[7] mirrors_PiotrMachowski/Xiaomi-cloud-tokens-extractor - Gitee
+    URL: awesome.ecosyste.ms/projects/github.com/t0mer/Xiaomi-Token-Extractor
+    This tool/script retrieves tokens for all devices connected to Xiaomi cloud and encryption keys for BLE devices. You will need to provide Xiaomi Home credentials (not ones from Roborock app):
+
+[8] https://github.com/t0mer/Xiaomi-Token-Extractor - awesome.ecosyste.ms
+    URL: community.home-assistant.io/t/xiaomi-token-extractor-docker/296354
+    Thanks to [https://github.com/tzungtzu](https://github.com/tzungtzu/ Xiaomi - cloud - tokens - extractor ) that did the hard work i was able to create this docker with web interface.
+
+[9] Xiaomi Token Extractor (Docker) - Home Assistant Community
+    URL: github.com/PiotrMachowski/Xiaomi-cloud-tokens-extractor/blob/master/README.md
+    New docker container i have developed, helping us to extract Xiaomi device tokens in order to easelly integrate them with Home-Assistant. The container will expose all your devices info in single webpage.
+
+[10] Xiaomi-cloud-tokens-extractor/README.md at master - GitHub
+    URL: github.com/PiotrMachowski/Xiaomi-cloud-tokens-extractor/releases
+    This tool retrieves tokens for all devices connected to Xiaomi cloud and encryption keys for BLE devices. - PiotrMachowski/ Xiaomi - cloud - tokens - extractor

@@ -1,0 +1,150 @@
+/**
+ * 外脑 · 频道核心类型定义
+ *
+ * 所有 IM 接入（飞书、钉钉、企业微信、CLI、WebChat 等）共用以下接口。
+ * thread_id 格式：<channel>:<type>:<id>
+ *   例：feishu:dm:alice | feishu:group:G001 | cli:dm:local
+ */
+
+// ── 消息方向 ─────────────────────────────────────────────────────────────────
+
+/** 入站消息（IM → 外脑） */
+export interface InboundMessage {
+  /** 消息唯一 ID（平台原生或 UUID） */
+  id: string;
+
+  /** 会话线程 ID，格式：<channel>:<type>:<id> */
+  thread_id: string;
+
+  /** 所属频道 ID，如 "feishu" | "dingtalk" | "cli" */
+  channel_id: string;
+
+  /** 统一用户 ID（跨频道归一） */
+  user_id: string;
+
+  /** 平台原始用户标识（如飞书的 open_id） */
+  raw_user_id: string;
+
+  /** 消息文本内容 */
+  content: string;
+
+  /** agent 是否被 @ mention */
+  is_mention: boolean;
+
+  /** 所有被 @ 的 user_id（统一ID） */
+  mentions: string[];
+
+  /** 时间戳 Unix ms */
+  ts: number;
+
+  /** 回复的消息 ID（如果是回复） */
+  reply_to?: string | undefined;
+
+  /** 附件（图片、文件等） */
+  attachments?: MessageAttachment[] | undefined;
+
+  /** 群聊类型。DM 时为 undefined */
+  group_info?: GroupInfo | undefined;
+}
+
+/** 出站消息（外脑 → IM） */
+export interface OutboundMessage {
+  /** 目标 thread_id */
+  thread_id: string;
+
+  /** 文本内容 */
+  content: string;
+
+  /** 回复特定消息 ID（可选） */
+  reply_to?: string | undefined;
+}
+
+/** 消息附件 */
+export interface MessageAttachment {
+  type: 'image' | 'file' | 'audio' | 'video';
+  url?: string | undefined;
+  name?: string | undefined;
+  size?: number | undefined;
+}
+
+/** 消息携带的群信息（群消息时填充） */
+export interface GroupInfo {
+  group_id: string;
+  group_name: string;
+  /** 当前群中有哪些 user_id 是 agent 认识的 */
+  known_members?: string[] | undefined;
+}
+
+// ── 频道适配器 ──────────────────────────────────────────────────────────────
+
+/**
+ * 每个 IM 平台实现此接口。
+ * 外脑启动时调用 start()，收到消息时调用 onMessage 回调。
+ * 新接入平台只需实现此接口并注册到 ChannelRegistry。
+ */
+export interface ChannelAdapter {
+  /** 频道唯一标识，如 "feishu" | "dingtalk" | "cli" */
+  readonly channel_id: string;
+
+  /** 频道人类可读名称 */
+  readonly name: string;
+
+  /**
+   * 启动监听。收到消息时调用 onMessage。
+   * 实现应保证：
+   * - thread_id 按 <channel>:<type>:<id> 格式生成
+   * - user_id 通过 UserStore.resolveUser() 归一化
+   */
+  start(onMessage: (msg: InboundMessage) => Promise<void>): Promise<void>;
+
+  /** 向指定 thread 发送消息 */
+  send(msg: OutboundMessage): Promise<void>;
+
+  /**
+   * 将平台原始用户 ID 转换为统一 user_id。
+   * 未知用户返回 null，调用方可自动注册。
+   */
+  resolveUser(rawUserId: string, channelId: string): string | null;
+
+  /** 优雅停止（取消监听、关闭连接等） */
+  stop(): Promise<void>;
+}
+
+// ── Thread 模型 ──────────────────────────────────────────────────────────────
+
+export type ThreadType = 'dm' | 'group';
+
+/** 对话线程元数据 */
+export interface Thread {
+  thread_id: string;
+  channel_id: string;
+  type: ThreadType;
+
+  /** DM 时为对方 user_id；Group 时为群 ID */
+  peer_id: string;
+
+  /** Group 时的群名称 */
+  group_name?: string | undefined;
+
+  /** 参与成员 user_id 列表（Group 用） */
+  members?: string[] | undefined;
+
+  /** 群聊滚动摘要（外脑维护，LLM 参考用） */
+  group_summary?: string | undefined;
+
+  created_at: number;
+  last_msg_at: number;
+}
+
+// ── 用户模型 ─────────────────────────────────────────────────────────────────
+
+/** 用户在单个频道的绑定信息 */
+export interface UserChannelBinding {
+  channel_id: string;
+  raw_id: string;
+
+  /**
+   * 通知优先级（越小越优先）。
+   * 由动态学习模块根据响应速度自动调整。
+   */
+  priority: number;

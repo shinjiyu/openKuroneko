@@ -1,0 +1,24 @@
+{
+  "users": [
+    {
+      "user_id": "alice",
+      "token": "alice",
+      "display_name": "Alice"
+    },
+    {
+      "user_id": "bob",
+      "token": "bob",
+      "display_name": "Bob"
+    }
+  ],
+  "rooms": [
+    {
+      "room_id": "project",
+      "name": "项目组"
+    },
+    {
+      "room_id": "general",
+      "name": "综合讨论"
+    }
+  ]
+}

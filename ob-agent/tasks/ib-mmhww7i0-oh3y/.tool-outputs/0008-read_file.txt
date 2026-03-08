@@ -1,0 +1,285 @@
+# 小米摄像头技术方案调研报告
+
+## 一、调研概述
+
+**调研目标**：探索小米摄像头的 API 控制方案，重点关注云台控制（PTZ）能力
+
+**调研日期**：2026-03-08
+
+**关键发现**：小米摄像头采用封闭生态，**不支持 ONVIF 协议**，但可通过 miIO/MIoT 协议和开源工具实现控制。
+
+---
+
+## 二、核心技术方案
+
+### 方案 1：python-miio 库（推荐）
+
+**项目地址**：https://github.com/rytilahti/python-miio
+
+**技术特点**：
+- 开源 Python 库，支持 miIO 和 MIoT 协议
+- 提供命令行工具 `miiocli` 和 Python API
+- 社区维护，支持多种小米智能设备
+
+**小米摄像头支持**：
+- 有专门的 `ChuangmiCamera` 模块（`miio.integrations.chuangmi.camera`）
+- 支持的功能包括：
+  - `flip_on()` / `flip_off()` - 画面翻转
+  - `night_mode` - 夜视模式
+  - `alarm()` - 报警控制
+  - `motion_record` - 移动侦测录像
+  - `watermark_on()` / `watermark_off()` - 水印控制
+  - `sdcard_status` - SD 卡状态
+  - `set_motion_sensitivity()` - 移动侦测灵敏度
+
+**安装方式**：
+```bash
+pip install python-miio
+```
+
+**使用示例**：
+```python
+from miio import ChuangmiCamera
+
+# 需要设备 IP 和 token
+camera = ChuangmiCamera("192.168.1.100", "your-token-here")
+
+# 获取状态
+status = camera.status()
+print(status.flip)  # 翻转状态
+print(status.night_mode)  # 夜视模式
+
+# 控制功能
+camera.flip_on()
+```
+
+**⚠️ PTZ 云台控制**：
+- python-miio 文档中**未明确列出 PTZ 控制方法**
+- 需要进一步研究 MIoT-Spec 规范中摄像头的 PTZ 属性定义
+- 可能需要通过 `genericmiot` 接口调用设备特定的属性和方法
+
+---
+
+### 方案 2：小米官方 HomeAssistant 集成
+
+**项目地址**：https://github.com/XiaoMi/ha_xiaomi_home
+
+**技术特点**：
+- 小米官方开源的 Home Assistant 集成
+- 使用小米官方云端 API（与米家 App 相同）
+- 支持大部分小米 IoT 设备
+
+**优势**：
+- 官方支持，稳定性好
+- 与米家账号直接集成，无需获取设备 token
+- 可作为 PTZ 控制的参考实现
+
+**劣势**：
+- 依赖云端，非本地控制
+- 需要运行 Home Assistant
+
+---
+
+### 方案 3：hass-xiaomi-miot 社区插件
+
+**项目地址**：https://github.com/al-one/hass-xiaomi-miot
+
+**技术特点**：
+- 社区维护的 Home Assistant 集成
+- 支持 MIoT-Spec 协议的设备自动发现和控制
+- 支持本地控制（需要 token）和云端控制
+
+**摄像头支持**：
+- 支持小米摄像头接入
+- 可能包含 PTZ 控制功能
+- 可查看 MIoT-Spec 定义的设备属性和方法
+
+---
+
+### 方案 4：micam RTSP 桥接服务
+
+**项目地址**：https://github.com/miiot/micam
+
+**技术特点**：
+- 小米摄像头专用的 RTSP 桥接服务
+- 将小米摄像头视频流转推为 RTSP 格式
+- 集成 miloco（小米摄像头管理工具）和 go2rtc
+
+**适用场景**：
+- 视频流获取和录制
+- 接入 NVR 系统（如 Frigate、Scrypted）
+- 不涉及 PTZ 控制
+
+---
+
+## 三、miIO/MIoT 协议详解
+
+### 协议基础
+
+**miIO 协议**：
+- 基于 UDP 的加密二进制协议
+- 端口：54321
+- 需要设备 token 进行加密通信
+
+**MIoT 协议**：
+- miIO 协议的升级版
+- 使用 MIoT-Spec 规范描述设备功能
+- 支持属性（Property）、方法（Action）、事件（Event）
+
+### 协议结构（miIO 二进制协议）
+
+```
+| 字段 | 长度 | 说明 |
+|------|------|------|
+| Magic number | 16 bits | 固定值 0x2131 |
+| Packet length | 16 bits | 数据包长度 |
+| Unknown | 32 bits | 未知字段 |
+| Device ID | 32 bits | 设备标识 |
+| Timestamp | 32 bits | 时间戳 |
+| Checksum | 32 bits | 校验和 |
+| Payload | 变长 | 加密的载荷数据 |
+```
+
+### Token 获取方法
+
+1. **从米家 App 提取**（需要 root 或抓包）
+2. **使用 python-miio 的设备发现功能**
+3. **通过小米云端 API 获取**
+
+---
+
+## 四、小米摄像头 PTZ 控制可行性分析
+
+### 当前状况
+
+1. **官方不支持 ONVIF**
+   - 小米摄像头**不支持 ONVIF 协议**
+   - 原因：生态垄断策略
+   - 无法使用标准 ONVIF PTZ 控制命令
+
+2. **python-miio PTZ 支持不明确**
+   - ChuangmiCamera 模块未明确列出 PTZ 方法
+   - 需要通过 MIoT-Spec 查找 PTZ 相关属性
+
+3. **可能的实现路径**
+   - 通过 MIoT-Spec 规范查找摄像头 PTZ 的属性和方法
+   - 使用 `genericmiot` 接口直接调用
+   - 参考 hass-xiaomi-miot 的实现
+
+### 建议的探索步骤
+
+1. **获取设备 MIoT-Spec**
+   - 通过小米 IoT 平台或 hass-xiaomi-miot 获取摄像头型号的 MIoT-Spec 定义
+   - 查找 `pan`、`tilt`、`zoom` 相关属性
+
+2. **使用 python-miio genericmiot 接口**
+   ```python
+   from miio import GenericMiot
+
+   device = GenericMiot("192.168.1.100", "token")
+   
+   # 列出所有属性
+   for prop in device.properties():
+       print(f"{prop.name}: {prop.value}")
+   
+   # 列出所有方法
+   for action in device.actions():
+       print(f"{action.name}")
+   
+   # 调用 PTZ 相关方法（如果存在）
+   device.call("camera:move", {"direction": "left"})
+   ```
+
+3. **抓包分析**
+   - 使用 Wireshark 抓取米家 App 与摄像头的通信
+   - 分析 PTZ 控制命令的格式
+
+---
+
+## 五、技术路线推荐
+
+### 优先级排序
+
+1. **第一优先级：python-miio + MIoT-Spec 探索**
+   - 成本：低（开源免费）
+   - 可行性：中（需要确认 PTZ 支持）
+   - 步骤：
+     1. 安装 python-miio
+     2. 获取摄像头 token
+     3. 使用 genericmiot 接口探索设备属性和方法
+     4. 测试 PTZ 控制功能
+
+2. **第二优先级：参考 hass-xiaomi-miot 实现**
+   - 成本：低（开源参考）
+   - 可行性：高（已验证的实现）
+   - 步骤：
+     1. 研究 hass-xiaomi-miot 源码中的摄像头 PTZ 实现
+     2. 提取 PTZ 控制逻辑
+     3. 实现独立的控制脚本
+
+3. **第三优先级：小米官方云端 API**
+   - 成本：中（需要申请开发者权限）
+   - 可行性：高（官方支持）
+   - 步骤：
+     1. 申请小米 IoT 开发者账号
+     2. 查阅官方 API 文档
+     3. 调用云端 PTZ 控制接口
+
+---
+
+## 六、关键资源链接
+
+### 官方资源
+- 小米 IoT 开发者平台：https://iot.mi.com
+- MIoT Spec 协议文档：https://iot.mi.com/v2/new/doc/introduction/knowledge/spec
+- 小米官方 HomeAssistant 集成：https://github.com/XiaoMi/ha_xiaomi_home
+
+### 开源项目
+- python-miio：https://github.com/rytilahti/python-miio
+- python-miio 文档：https://python-miio.readthedocs.io
+- hass-xiaomi-miot：https://github.com/al-one/hass-xiaomi-miot
+- micam（RTSP 桥接）：https://github.com/miiot/micam
+
+### 协议资料
+- miIO 协议分析：https://zhuanlan.zhihu.com/p/701560223
+- MIoT vs MiIO 对比：https://blog.csdn.net/gitblog_00119/article/details/152252285
+
+---
+
+## 七、下一步行动计划
+
+1. **立即行动**：
+   - 使用 python-miio 连接测试摄像头
+   - 使用 `genericmiot` 接口列出所有属性和方法
+   - 确认 PTZ 控制的可行性
+
+2. **短期行动**（1-2 周）：
+   - 研究 hass-xiaomi-miot 源码中的 PTZ 实现
+   - 实现基础的 PTZ 控制脚本
+
+3. **中期行动**（1 个月）：
+   - 完善控制功能（预设位、巡航等）
+   - 集成到目标系统
+
+---
+
+## 八、风险评估
+
+| 风险项 | 影响 | 概率 | 应对措施 |
+|--------|------|------|----------|
+| PTZ 功能不被 miIO 协议支持 | 高 | 中 | 参考其他实现或使用云端 API |
+| Token 获取困难 | 中 | 低 | 使用多种方法尝试 |
+| 协议变更导致失效 | 高 | 低 | 关注社区动态，及时更新 |
+| 小米封锁非官方访问 | 高 | 低 | 使用官方 API 作为备选 |
+
+---
+
+## 九、结论
+
+小米摄像头**不支持标准的 ONVIF 协议**，但可以通过 **miIO/MIoT 协议**实现控制。推荐的技术路线是：
+
+1. **首选方案**：使用 `python-miio` 库的 `genericmiot` 接口探索和实现 PTZ 控制
+2. **备选方案**：参考 `hass-xiaomi-miot` 的实现
+3. **兜底方案**：使用小米官方云端 API
+
+**关键待确认项**：需要实际测试 python-miio 对小米摄像头 PTZ 功能的支持程度。

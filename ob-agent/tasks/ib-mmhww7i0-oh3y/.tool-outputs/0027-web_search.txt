@@ -1,0 +1,39 @@
+[1] Xiaomi Tokens - Alex&#x27;s Home Assistant documentation
+    URL: alex3305.github.io/home-assistant-docs/home-assistant/xiaomi-tokens/
+    Retrieving Xiaomi Home tokens For several Xiaomi devices it is necessary that you set an access token . This is a 32 character long hash that is generated every time the device first connects to wifi. Applicable devices This is applicable to all Xiaomi Home devices that connect over wifi. In my personal situation I retrieved the tokens of my:
+
+[2] 【Home Assistant】获取米家设备 token - CSDN博客
+    URL: blog.csdn.net/ZJXCSDN_/article/details/115309762
+    本文介绍了两种方法来获取小米智能设备（如 Xiaomi MiIO）的访问令牌。方法1涉及使用从home- assistant .io获取的指南，通过下载并运行GitHub上的软件Xiaomi-cloud- tokens -extractor和Get_MiHome_devices_token，输入米家账号和密码获取令牌。方法2是通过安装修改过的米家应用程序来实现。
+
+[3] Xiaomi miio device token extraction simplified - Home Assistant Community
+    URL: community.home-assistant.io/t/xiaomi-miio-device-token-extraction-simplified/368535
+    this morning i stumbled across this little Gem, and i was up and running with a xiaomi device token extraction, once i installed the windows version, in around 2-3 minutes
+
+[4] PiotrMachowski/Xiaomi-cloud-tokens-extractor - GitHub
+    URL: github.com/PiotrMachowski/Xiaomi-cloud-tokens-extractor
+    This tool retrieves tokens for all devices connected to Xiaomi cloud and encryption keys for BLE devices. It supports two ways of authentication: username (e-mail/ Xiaomi Cloud account ID) & password QR code After logging in you have to select a Xiaomi&#x27;s server region (cn - China, de - Germany etc.). Leave it empty to check all available In return all of your devices connected to account will ...
+
+[5] 获取小米key或token简单办法 - 『HomeAssistant』综合讨论区 - 『瀚思彼岸』» 智能家居技术论坛 - Powered ...
+    URL: bbs.hassbian.com/thread-11692-1-1.html
+    效果大神git链接https://github.com/PiotrMachowski/ Xiaomi -cloud- tokens -extractor 获取小米key或token简单办法 ,『瀚思彼岸』» 智能家居技术论坛
+
+[6] 【踩坑】修复token_extractor卡在2FA双重验证 - 腾讯云
+    URL: cloud.tencent.com/developer/article/2527175
+    该工具可提取米家账号Token以控制设备，但小米更新后需应对2FA验证。解决步骤包括运行脚本、登录触发2FA、浏览器抓包获取关键参数，修改token_extractor.py文件并替换登录验证逻辑，最终成功绕过限制提取Token。
+
+[7] 快速取得小米token以便加入Home assistant
+    URL: percy10442.pixnet.net/blog/posts/9556896301
+    所有的小米智能家居想加入 Home assistant必須取得token碼，快速取得方式有以下3種
+
+[8] 低成本玩转智能家庭（四）Home Assistant本地控制米家Zigbee、BLE 和 Mesh 设备
+    URL: zhuanlan.zhihu.com/p/668412907
+    首先需要选择第一个 Add Mi Clound Account，才能获取到Token。 如果你知道Token，直接选择第二个选项输入Token就行 当输入小米账户密码配置成功后，再点击【添加集成】按钮，重新选择 Xiaomi Gateway 3，会发现多出了多模网关的选项，选中它点击【提交】
+
+[9] How to Get Mi Home Devices Token - blog.matterxiaomi.com
+    URL: blog.matterxiaomi.com/blog/How-Get-Mi-Home-Devices-Token/
+    How to Get Mi Home Devices Token If you using Mi Home App of Xiaomi , no matter what to discuss here.But if you want to control your Smart devices via Home Assistant and control all devices on local network (for avoid leaking information), you need to get password key hidden by provider. How to send message via MIIO: you need device token .
+
+[10] ha(homeassistant)本地化小米 gateway3网关 小米token获取_哔哩哔哩_bilibili
+    URL: www.bilibili.com/video/BV1bYG2z8Ett/
+    ha小米智能家居本地化操作，获取小米设备token的简单方式。, 视频播放量 1903、弹幕量 0、点赞数 22、投硬币枚数 11、收藏人数 39、转发人数 7, 视频作者 过期的白酒, 作者简介 ，相关视频： [教程]美的极米等蓝牙遥控器也能接入米家？

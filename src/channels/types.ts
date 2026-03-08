@@ -174,11 +174,15 @@ export interface User {
 export interface InnerBrainStatus {
   ts: string;
   mode: string;
-  milestone?: { id: string; title: string } | undefined;
+  milestone?: { id: string; title: string; cyclic?: boolean } | undefined;
   goal_origin_user?: string | undefined;
   blocked: boolean;
   block_reason: string | null;
   block_question?: string | undefined;
+  /** SLEEPING 模式：唤醒时间（ISO 8601） */
+  sleeping_until?: string | null;
+  /** 当前循环里程碑已完成的轮次 */
+  cycle_count?: number;
 }
 
 // ── 内脑 BLOCK/COMPLETE 输出 ─────────────────────────────────────────────────

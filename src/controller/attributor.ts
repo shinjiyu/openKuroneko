@@ -19,7 +19,7 @@ const ATTR_STATE_MAX   = 3000;
 /** Attributor 中错误摘要单条最大字符数 */
 const ATTR_ERROR_MAX   = 500;
 
-export type ControlFlag = 'CONTINUE' | 'SUCCESS_AND_NEXT' | 'REPLAN' | 'BLOCK';
+export type ControlFlag = 'CONTINUE' | 'SUCCESS_AND_NEXT' | 'REPLAN' | 'BLOCK' | 'CYCLE_DONE';
 
 export interface AttributeResult {
   flag: ControlFlag;
@@ -64,14 +64,17 @@ export const ATTRIBUTOR_SYSTEM = `你是一个强制归因器（Mandatory Attrib
 
 【任务 5 — 控制决策】（必做，最后输出）
 最后两行必须是：
-CONTROL: <CONTINUE|SUCCESS_AND_NEXT|REPLAN|BLOCK>
+CONTROL: <CONTINUE|SUCCESS_AND_NEXT|REPLAN|BLOCK|CYCLE_DONE>
 REASON: <一句话说明原因>
 
 判断标准：
 - CONTINUE：有实质进展但里程碑未完成，继续执行
-- SUCCESS_AND_NEXT：里程碑目标已达成
+- SUCCESS_AND_NEXT：里程碑目标已达成（含循环里程碑的终止条件满足）
 - REPLAN：遇到根本性障碍，当前计划不可行，且无人类协助需求，需要重新规划
 - BLOCK：无法独立解决，需要外脑或人类介入（Human-in-the-loop）
+- CYCLE_DONE：**仅用于 [cyclic:N] 标签的循环里程碑**，本轮循环工作已完成，
+  目标终止条件尚未满足，等待下一个周期再继续。
+  REASON 中必须写明：本轮做了什么 + 下一轮应从何处继续。
 
 【Human-in-the-loop 优先】以下情况必须使用 BLOCK，不要用 REPLAN：
 - 目标需要登录/认证才能访问（如微博、需登录的网站、API 需 key），且当前无法自动登录
@@ -256,7 +259,7 @@ export function parseControlFlag(content: string): { flag: ControlFlag; reason: 
     .replace(/[：]/g, ':')                               // 全角冒号 → 半角
     .replace(/`([^`]+)`/g, '$1');                        // `CONTINUE` → CONTINUE
 
-  const VALID_FLAGS = ['CONTINUE', 'SUCCESS_AND_NEXT', 'REPLAN', 'BLOCK'] as const;
+  const VALID_FLAGS = ['CONTINUE', 'SUCCESS_AND_NEXT', 'REPLAN', 'BLOCK', 'CYCLE_DONE'] as const;
   const flagPattern = VALID_FLAGS.join('|');
 
   const controlMatch = cleaned.match(new RegExp(`CONTROL\\s*:\\s*(${flagPattern})`, 'i'));

@@ -70,16 +70,20 @@ export function createController(ctx: ControllerContext, deps: ControllerDeps): 
 
   function syncStatus(): void {
     try {
-      const state = brain.readState();
+      const state     = brain.readState();
       const milestone = brain.getActiveMilestone();
-      const status = {
-        ts:              new Date().toISOString(),
-        mode:            state.mode,
-        milestone:       milestone ? { id: milestone.id, title: milestone.title } : null,
+      const status: Record<string, unknown> = {
+        ts:               new Date().toISOString(),
+        mode:             state.mode,
+        milestone:        milestone ? { id: milestone.id, title: milestone.title, cyclic: milestone.cyclic ?? false } : null,
         goal_origin_user: brain.readGoalOriginUser(),
-        blocked:         state.mode === 'BLOCKED',
-        block_reason:    state.blockedReason ?? null,
+        blocked:          state.mode === 'BLOCKED',
+        block_reason:     state.blockedReason ?? null,
       };
+      if (state.mode === 'SLEEPING') {
+        status['sleeping_until'] = state.sleepUntil ?? null;
+        status['cycle_count']    = state.cycleCount ?? 0;
+      }
       fs.writeFileSync(statusFile, JSON.stringify(status, null, 2), 'utf8');
     } catch { /* non-critical */ }
   }
@@ -346,8 +350,89 @@ export function createController(ctx: ControllerContext, deps: ControllerDeps): 
             await safeArchive(knowledgeStore, brain, agentId, workDir, 'BLOCK', attrResult.reason, logger);
             break;
           }
+
+          case 'CYCLE_DONE': {
+            const milestone = execCtx.activeMilestone;
+            if (!milestone.cyclic || !milestone.cycleIntervalMs) {
+              // 非循环里程碑误用 CYCLE_DONE → 降级为 CONTINUE，记录警告
+              logger.warn('controller', {
+                event: 'cycle_done.non_cyclic',
+                data: { milestoneId: milestone.id, reason: attrResult.reason },
+              });
+              state.mode = 'EXECUTE';
+              brain.writeState(state);
+              break;
+            }
+
+            // 循环里程碑：本轮完成，进入 SLEEPING 等待下一周期
+            brain.keepCyclicMilestoneActive(milestone.id);
+            state.cycleCount = (state.cycleCount ?? 0) + 1;
+            state.sleepUntil = new Date(Date.now() + milestone.cycleIntervalMs).toISOString();
+            state.mode       = 'SLEEPING';
+            state.replanCount = 0;
+            brain.writeState(state);
+
+            logger.info('controller', {
+              event: 'cycle.sleeping',
+              data: {
+                milestoneId:   milestone.id,
+                cycleCount:    state.cycleCount,
+                sleepUntil:    state.sleepUntil,
+                intervalMs:    milestone.cycleIntervalMs,
+                reason:        attrResult.reason,
+              },
+            });
+
+            // 通知外脑（PROGRESS，不打断用户）
+            await writeProgressOutput(
+              ioRegistry,
+              `[循环第 ${state.cycleCount} 轮完成] ${attrResult.reason}\n下一轮时间：${state.sleepUntil}`,
+              brain.readGoalOriginUser(),
+              logger,
+            );
+            break;
+          }
         }
 
+        return { hadWork: true };
+      }
+
+      // ── SLEEPING 状态：等待定时唤醒（循环里程碑间歇） ──────────────────────────
+      if (state.mode === 'SLEEPING') {
+        // 外脑 input / directives 始终可以提前唤醒
+        const input = await safeReadInput(ioRegistry, logger);
+        const directives = readAndClearDirectives(directivesFile, logger);
+        const hasExternalSignal = !!input || directives.length > 0;
+
+        const wakeTime = state.sleepUntil ? new Date(state.sleepUntil).getTime() : 0;
+        const shouldWake = hasExternalSignal || Date.now() >= wakeTime;
+
+        if (!shouldWake) {
+          return { hadWork: false };
+        }
+
+        // 唤醒：注入外脑信号（如果有），恢复 EXECUTE
+        if (input) {
+          logger.info('controller', { event: 'sleep.interrupted', data: { reason: 'external input', preview: input.slice(0, 80) } });
+          state.replanReason = `外脑干预唤醒：${input}`;
+          state.mode = 'DECOMPOSE';
+        } else {
+          logger.info('controller', {
+            event: 'sleep.wakeup',
+            data: { cycleCount: state.cycleCount ?? 0, sleepUntil: state.sleepUntil },
+          });
+          // 注入约束（如有 directive）
+          for (const d of directives) {
+            if (d.type === 'constraint' || d.type === 'requirement') {
+              brain.appendConstraint(
+                `\n\n<!-- directive ${d.type} ${d.ts} from ${d.from} -->\n[外脑指示] ${d.content}`,
+              );
+            }
+          }
+          state.mode = 'EXECUTE';
+        }
+        state.sleepUntil = null;
+        brain.writeState(state);
         return { hadWork: true };
       }
 
@@ -451,6 +536,24 @@ async function writeBlockOutput(
     type:        'BLOCK',
     message:     reason,
     question:    reason,
+    target_user: targetUser ?? undefined,
+    ts:          new Date().toISOString(),
+  });
+  await writeOutput(ioRegistry, output, logger);
+}
+
+/**
+ * 写入 PROGRESS 输出（JSON），供外脑 push-loop 记录进度（不打断用户）。
+ */
+async function writeProgressOutput(
+  ioRegistry: IORegistry,
+  message: string,
+  targetUser: string | null,
+  logger: Logger,
+): Promise<void> {
+  const output = JSON.stringify({
+    type:        'PROGRESS',
+    message,
     target_user: targetUser ?? undefined,
     ts:          new Date().toISOString(),
   });

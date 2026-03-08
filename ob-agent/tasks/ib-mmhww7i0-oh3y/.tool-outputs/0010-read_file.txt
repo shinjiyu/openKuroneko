@@ -1,0 +1,136 @@
+# 小米摄像头技术资源链接汇总
+
+## 核心开源项目
+
+### 1. python-miio
+- **GitHub**: https://github.com/rytilahti/python-miio
+- **文档**: https://python-miio.readthedocs.io/en/latest/
+- **PyPI**: https://pypi.org/project/python-miio/
+- **摄像头模块文档**: https://python-miio.readthedocs.io/en/latest/api/miio.integrations.chuangmi.camera.html
+
+### 2. 小米官方 HomeAssistant 集成
+- **GitHub**: https://github.com/XiaoMi/ha_xiaomi_home
+- **中文文档**: https://github.com/XiaoMi/ha_xiaomi_home/blob/main/doc/README_zh.md
+
+### 3. hass-xiaomi-miot（社区）
+- **GitHub**: https://github.com/al-one/hass-xiaomi-miot
+- **中文文档**: https://github.com/al-one/hass-xiaomi-miot/blob/master/README_zh.md
+
+### 4. micam（RTSP 桥接）
+- **GitHub**: https://github.com/miiot/micam
+- **功能**: 将小米摄像头视频流转为 RTSP 格式
+
+---
+
+## 协议文档
+
+### miIO 协议
+- **协议分析**: https://zhuanlan.zhihu.com/p/701560223
+- **二进制协议详解**: UDP 端口 54321，加密通信
+
+### MIoT 协议
+- **官方文档**: https://iot.mi.com/v2/new/doc/introduction/knowledge/spec
+- **协议对比**: https://blog.csdn.net/gitblog_00119/article/details/152252285
+- **MIoT-Spec-V2**: 小米 IoT 平台的物模型标准
+
+---
+
+## 小米官方平台
+
+### 小米 IoT 开发者平台
+- **主页**: https://iot.mi.com
+- **文档中心**: https://iot.mi.com/new/doc/introduction/main
+- **摄像头方案**: https://iot.mi.com/new/doc/solution/camera
+
+### 小米澎湃OS 开发者平台
+- **主页**: https://dev.mi.com
+- **相机引擎**: https://dev.mi.com/xiaomihyperos/ability/camera
+- **接入文档**: https://dev.mi.com/xiaomihyperos/documentation/detail?pId=1812
+
+---
+
+## 社区资源
+
+### HomeAssistant 中文社区
+- **小米摄像机讨论**: https://bbs.hassbian.com/thread-27936-1-1.html
+- **PTZ 控制**: https://bbs.hassbian.com/thread-26038-1-1.html
+
+### 知乎文章
+- **Python-miio 入门**: https://zhuanlan.zhihu.com/p/705952033
+- **miIO 协议**: https://zhuanlan.zhihu.com/p/701560223
+- **小米官方 HA 集成**: https://zhuanlan.zhihu.com/p/13232622548
+
+### CSDN 博客
+- **python-miio 完整指南**: https://blog.csdn.net/gitblog_00438/article/details/153917839
+- **MIoT vs MiIO**: https://blog.csdn.net/gitblog_00119/article/details/152952285
+- **小米摄像头 HA 集成**: https://blog.csdn.net/gitblog_00793/article/details/157894193
+
+---
+
+## 关键技术发现
+
+### ⚠️ 重要限制
+1. **小米摄像头不支持 ONVIF 协议**（官方封闭生态策略）
+2. **部分型号支持 RTSP**（需要特定方法开启）
+3. **PTZ 控制需要通过 miIO/MIoT 协议实现**
+
+### ✅ 可行方案
+1. **python-miio** - 本地控制（需要设备 token）
+2. **小米官方 HA 集成** - 云端 API
+3. **hass-xiaomi-miot** - 社区增强版
+4. **micam** - RTSP 视频流桥接
+
+---
+
+## 快速开始命令
+
+### 安装 python-miio
+```bash
+pip install python-miio
+```
+
+### 发现设备
+```bash
+miiocli discover
+```
+
+### 获取设备信息（需要 token）
+```bash
+miiocli genericmiot --ip 192.168.1.100 --token YOUR_TOKEN info
+```
+
+### 列出设备属性
+```bash
+miiocli genericmiot --ip 192.168.1.100 --token YOUR_TOKEN properties
+```
+
+### 列出设备动作
+```bash
+miiocli genericmiot --ip 192.168.1.100 --token YOUR_TOKEN actions
+```
+
+---
+
+## Token 获取方法
+
+### 方法 1：从米家 App 提取（需要 root）
+### 方法 2：使用 python-miio 的设备发现功能
+### 方法 3：从路由器日志抓取
+### 方法 4：使用第三方工具（如 MiTool）
+
+详细方法参考：https://python-miio.readthedocs.io/en/latest/discovery.html
+
+---
+
+## 下一步行动
+
+1. **获取测试设备的 token**
+2. **使用 python-miio 连接设备**
+3. **列出所有属性和方法，查找 PTZ 相关接口**
+4. **测试 PTZ 控制功能**
+5. **编写控制脚本**
+
+---
+
+**文档创建日期**: 2026-03-08  
+**最后更新**: 2026-03-08

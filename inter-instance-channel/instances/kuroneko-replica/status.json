@@ -1,0 +1,9 @@
+{
+  "id": "kuroneko-replica",
+  "work_dir": "/Users/user/Documents/openKuroneko/chat-agent-replica",
+  "port": 8092,
+  "role": "replica",
+  "registered_at": "2026-03-07T16:44:35Z",
+  "last_heartbeat": "2026-03-07T16:44:35Z",
+  "status": "active"
+}

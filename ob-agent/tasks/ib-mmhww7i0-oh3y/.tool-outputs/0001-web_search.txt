@@ -1,0 +1,39 @@
+[1] 如何用Python-miio控制小米智能设备？2025完整入门指南 -CSDN博客
+    URL: blog.csdn.net/gitblog_00438/article/details/153917839
+    文章浏览阅读1k次，点赞17次，收藏22次。**Python-miio**是一款强大的开源工具，让你轻松通过Python代码或命令行掌控小米智能家电。无论是扫地机器人、空气净化器还是智能灯泡，它都能完美支持miIO和MIoT协议，让你的智能家居设备秒变可编程的「智能伙伴」!## ???? 为什么选择 Python-miio ？核心优势解析 ...
+
+[2] 一行代码控制你的米家设备 - 知乎专栏
+    URL: zhuanlan.zhihu.com/p/705952033
+    前言 大概在去年还是前年的时候，因为手机换成了iOS，没有小爱同学了之后， 只能使用米家App来控制米家设备实在蛋疼， 于是那阵子就折腾过 HomeAssistant 方案， 于是写过这样的文章。 知乎专栏：Home Assistant 智能家居系统搭建指南（米家+Siri） 这个方案配合 HomePod 音响，基本满足了我的需求了 ...
+
+[3] GitHub - rytilahti/python-miio: Python library & console tool for ...
+    URL: github.com/rytilahti/python-miio
+    python-miio This library (and its accompanying cli tool, miiocli) can be used to control devices using Xiaomi&#x27;s miIO and MIoT protocols. This is a voluntary, community-driven effort and is not affiliated with any of the companies whose devices are supported by this library. Issue reports and pull requests are welcome, see contributing!
+
+[4] python-miio: 用于控制小米智能家电的 Python 库 - Gitee
+    URL: gitee.com/watching/python-miio
+    python-miio This library (and its accompanying cli tool, miiocli) can be used to control devices using Xiaomi&#x27;s miIO and MIoT protocols. This is a voluntary, community-driven effort and is not affiliated with any of the companies whose devices are supported by this library. Issue reports and pull requests are welcome, see contributing!
+
+[5] 终极指南：5步掌握Python-miio，轻松控制小米智能设备-CSDN博客
+    URL: blog.csdn.net/gitblog_00121/article/details/155120347
+    文章浏览阅读823次，点赞11次，收藏11次。想要完全掌控家中的小米智能设备吗？Python-miio库为你提供了强大的解决方案!这个开源Python库让你能够通过编程方式控制各种小米智能家电，从空气净化器、扫地机器人到智能插座和灯具。无论你是智能家居爱好者、开发者还是普通用户，这个完整指南将带 ...
+
+[6] python-miio 入门 - c/ - 博客园
+    URL: www.cnblogs.com/ff888/p/16977114.html
+    这是我的职责。 如果有人描述如何根据这些知识进一步制作 Home Assistant 插件，我会很高兴 :) 感谢作者的分享。 三、实际操作 控制 chuangmi.plug.212a01 这个插座（小米智能插座2蓝牙网关版） 注意 python -miio这个库不要用命令行去装，依赖版本会错，用pycharm去添加。
+
+[7] 如何为新型小米设备快速添加python-miio支持：终极完整指南 - AtomGit | GitCode博客
+    URL: blog.gitcode.com/720c67c7413b3f066ef086cf6bf5e649.html
+    想要控制最新款的小米智能设备吗？ python-miio 库为你提供了完整的解决方案!🚀 这个强大的Python库支持小米的miIO和MIoT协议，让你能够轻松集成各种小米智能家电。 无论你是智能家居爱好者还是开发者，通过本指南你将学会如何为任何新型小米设备添加支持，实现完全自定义的设备控制。 #
+
+[8] Installation — python-miio documentation
+    URL: python-miio.readthedocs.io/en/latest/
+    python-miio This library (and its accompanying cli tool, miiocli) can be used to control devices using Xiaomi&#x27;s miIO and MIoT protocols. This is a voluntary, community-driven effort and is not affiliated with any of the companies whose devices are supported by this library. Issue reports and pull requests are welcome, see contributing!
+
+[9] 通过python控制小米设备(扫地机器人) - 知乎
+    URL: zhuanlan.zhihu.com/p/108683947
+    最近一直研究 如何通过 python 脚本控制小米设备，获取设备当前工作状态。 主要分4步操作 1.准备PC一台(能连网) 2.安装 python - miio 模块 米家的智能设备都遵循了 miio 的协议 python -miio是封装后的miio-API,可以采用…
+
+[10] 使用 Python 控制米家设备 - 迷子笔记
+    URL: moenew.us/python-miio-use.html
+    拿到了一个 米家智能插座 3，用了一下，发现米家 app 必须连接互联网才能控制设备，在断网情况下，即使 app 和设备在同一个局域网也无法控制。发现了 python-miio 项目，可以通过 Python 指定 ip 控制设备。

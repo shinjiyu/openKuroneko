@@ -1,0 +1,107 @@
+==> Fetching downloads for: nmap
+==> Installing dependencies for nmap: liblinear, libssh2, lua, readline, sqlite, xz, zstd and python@3.14
+==> Installing nmap dependency: liblinear
+==> Pouring liblinear--2.50.arm64_sequoia.bottle.tar.gz
+🍺  /opt/homebrew/Cellar/liblinear/2.50: 10 files, 335.3KB
+==> Installing nmap dependency: libssh2
+==> Pouring libssh2--1.11.1_1.arm64_sequoia.bottle.tar.gz
+🍺  /opt/homebrew/Cellar/libssh2/1.11.1_1: 201 files, 1.3MB
+==> Installing nmap dependency: lua
+==> Pouring lua--5.5.0.arm64_sequoia.bottle.tar.gz
+🍺  /opt/homebrew/Cellar/lua/5.5.0: 30 files, 980.7KB
+==> Installing nmap dependency: readline
+==> Pouring readline--8.3.3.arm64_sequoia.bottle.tar.gz
+🍺  /opt/homebrew/Cellar/readline/8.3.3: 56 files, 2.7MB
+==> Installing nmap dependency: sqlite
+==> Pouring sqlite--3.51.2_1.arm64_sequoia.bottle.tar.gz
+🍺  /opt/homebrew/Cellar/sqlite/3.51.2_1: 13 files, 5.3MB
+==> Installing nmap dependency: xz
+==> Pouring xz--5.8.2.arm64_sequoia.bottle.tar.gz
+🍺  /opt/homebrew/Cellar/xz/5.8.2: 96 files, 2.7MB
+==> Installing nmap dependency: zstd
+==> Pouring zstd--1.5.7_1.arm64_sequoia.bottle.tar.gz
+🍺  /opt/homebrew/Cellar/zstd/1.5.7_1: 32 files, 2.3MB
+==> Installing nmap dependency: python@3.14
+==> Pouring python@3.14--3.14.3_1.arm64_sequoia.bottle.tar.gz
+🍺  /opt/homebrew/Cellar/python@3.14/3.14.3_1: 3,764 files, 75.3MB
+==> Installing nmap
+==> Pouring nmap--7.98_1.arm64_sequoia.bottle.tar.gz
+🍺  /opt/homebrew/Cellar/nmap/7.98_1: 844 files, 30.4MB
+==> Running `brew cleanup nmap`...
+Disable this behaviour by setting `HOMEBREW_NO_INSTALL_CLEANUP=1`.
+Hide these hints with `HOMEBREW_NO_ENV_HINTS=1` (see `man brew`).
+
+==> Auto-updating Homebrew...
+Adjust how often this is run with `$HOMEBREW_AUTO_UPDATE_SECS` or disable with
+`$HOMEBREW_NO_AUTO_UPDATE=1`. Hide these hints with `$HOMEBREW_NO_ENV_HINTS=1` (see `man brew`).
+==> Auto-updated Homebrew!
+Updated 4 taps (oven-sh/bun, anomalyco/tap, homebrew/core and homebrew/cask).
+==> New Formulae
+apkeep: Command-line tool for downloading APK files from various sources
+atuin-server: Sync server for atuin - Improved shell history for zsh, bash, fish and nushell
+betterleaks: Secrets scanner built for configurability and speed
+cni-plugins: Container Network Interface plugins
+containerd: Open and reliable container runtime
+git-pkgs: Track package dependencies across git history
+googleworkspace-cli: CLI for Drive, Gmail, Calendar, Sheets, Docs, Chat, Admin, and more
+kubectl-tree: Kubectl plugin to browse Kubernetes object hierarchies as a tree
+landrun: Lightweight, secure sandbox for running Linux processes using Landlock LSM
+lld@21: LLVM Project Linker
+llvm@21: Next-gen compiler infrastructure
+lua@5.4: Powerful, lightweight programming language
+mkbrr: Is a tool to create, modify and inspect torrent files. Fast
+mp4ff: Tools for parsing and manipulating MP4/ISOBMFF files
+openspec: Spec-driven development (SDD) for AI coding assistants
+oven-sh/bun/bun@1.3.10
+pet: Simple command-line snippet manager
+protobuf@33: Protocol buffers (Google's data interchange format)
+rootlesskit: Linux-native "fake root" for implementing rootless containers
+runc: CLI tool for spawning and running containers according to the OCI specification
+rustypaste-cli: CLI tool for rustypaste
+skills: Open agent skills ecosystem
+spicedb: Open Source, Google Zanzibar-inspired database
+termframe: Terminal output SVG screenshot tool
+termusic: Music Player TUI written in Rust
+torf-cli: CLI tool for creating, reading and editing torrent files
+vapoursynth-bestsource: Audio/video source and FFmpeg wrapper
+vuls: Agentless Vulnerability Scanner for Linux/FreeBSD
+x-cli: Command-line power tool for Twitter
+==> New Casks
+bettercapture: Screen recorder
+cmux: Ghostty-based terminal with vertical tabs and notifications for AI coding agents
+connectiq-sdk-manager: Manage SDKs and download device definitions for Garmin Connect IQ development
+fabric-app: Personal knowledge management and note-taking app
+font-datatype
+font-ghanachocolate
+font-gmarket-sans
+font-iosevka-charon
+font-iosevka-charon-mono
+font-miranda-sans
+itsytv: Menu bar app for controlling your Apple TV
+kotlin-lsp: Official Kotlin Language Server
+paseo: Self-hosted daemon for AI coding agents
+spokenly: Dictation and transcription app with AI-powered editing
+t3-code: Minimal GUI for AI code agents
+tablepro: Native database client for MySQL, PostgreSQL, SQLite, and MongoDB
+vcmi: Open-source engine for Heroes of Might & Magic III
+
+You have 53 outdated formulae and 1 outdated cask installed.
+
+✔︎ Bottle Manifest nmap (7.98_1)
+✔︎ Bottle Manifest liblinear (2.50)
+✔︎ Bottle Manifest libssh2 (1.11.1_1)
+✔︎ Bottle Manifest lua (5.5.0)
+✔︎ Bottle Manifest readline (8.3.3)
+✔︎ Bottle Manifest sqlite (3.51.2_1)
+✔︎ Bottle Manifest xz (5.8.2)
+✔︎ Bottle Manifest zstd (1.5.7_1)
+✔︎ Bottle Manifest python@3.14 (3.14.3_1)
+✔︎ Bottle liblinear (2.50)
+✔︎ Bottle readline (8.3.3)
+✔︎ Bottle xz (5.8.2)
+✔︎ Bottle zstd (1.5.7_1)
+✔︎ Bottle lua (5.5.0)
+✔︎ Bottle sqlite (3.51.2_1)
+✔︎ Bottle libssh2 (1.11.1_1)
+✔︎ Bottle python@3.14 (3.14.3_1)
+✔︎ Bottle nmap (7.98_1)

@@ -1,0 +1,490 @@
+# openKuroneko 模块设计（开发指导）
+
+本文档基于《轻量多 Agent 系统设计》与《待细化设计清单》，给出可落地的模块划分、接口约定与实现顺序，用于指导后续开发。
+
+---
+
+## 一、模块总览
+
+### 1.1 架构示意
+
+```
+                    ┌─────────────────────────────────────────────────────────┐
+                    │                     Entry / CLI                          │
+                    │  --once | --loop fast | --loop interval | --loop cron    │
+                    │  --dir <path>  --workspace <path>  --config <path>       │
+                    └────────────────────────────┬────────────────────────────┘
+                                                 │
+  ┌──────────────────────────────────────────────┼──────────────────────────────────────────────┐
+  │                                              ▼                                              │
+  │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+  │  │   Identity  │    │  Config &   │    │  I/O 接口   │    │   Loop      │    │  R-CCAM     │
+  │  │   & Paths   │◄───│  Soul       │    │  Registry   │◄───│  Scheduler  │───►│  Runner     │
+  │  │             │    │  (热载)     │    │             │    │             │    │             │
+  │  └──────┬──────┘    └──────┬──────┘    └──────┬──────┘    └─────────────┘    └──────┬──────┘
+  │         │                  │                  │                                        │
+  │         │                  │                  │         ┌─────────────┐                │
+  │         ▼                  ▼                  ▼         │   Memory    │◄───────────────┤
+  │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐ │  (接口+实现)│                │
+  │  │  Temp Dir   │    │  Soul.md    │    │ Input/Output│ │ ┌─────────┐ │                │
+  │  │  <agent_id> │    │  热载       │    │ 读/写 实现   │ │ │ Recent  │ │                │
+  │  └─────────────┘    └─────────────┘    └─────────────┘ │ │ Mem0    │ │                │
+  │         │                                               │ └─────────┘ │                │
+  │         │                  ┌─────────────┐             └──────┬──────┘                │
+  │         └──────────────────►  Workspace  │                    │                       │
+  │                    (工作目录) └─────────────┘                    │                       │
+  │                                                                  ▼                       │
+  │  ┌─────────────────────────────────────────────────────────────────────────────────────┐ │
+  │  │                          Tools (read_file, write_file, shell_exec, web_search,       │ │
+  │  │                          get_time, reply_to_user, run_agent, Mem0 add/search)       │ │
+  │  │                          + capability_gap_handler (标记缺口，下轮自举)               │ │
+  │  └─────────────────────────────────────────────────────────────────────────────────────┘ │
+  │                                              │                                            │
+  │                                              ▼                                            │
+  │  ┌─────────────────────────────────────────────────────────────────────────────────────┐ │
+  │  │                          pi-mono（或等价 LLM 运行时）                                 │ │
+  │  │                          system + user message → model → tool calls                   │ │
+  │  └─────────────────────────────────────────────────────────────────────────────────────┘ │
+  └──────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1.2 模块列表
+
+| 模块 | 职责 | 产出/接口 |
+|------|------|-----------|
+| **M1. Identity & Paths** | Agent 身份、agent_id 派生、临时目录/工作目录解析、路径独占锁 | agent_id, tempDir, workspaceDir, 互斥保证 |
+| **M2. Config & Soul** | 全局/本地配置加载、Soul 加载与热载、system 片段拼接 | config, soul 文本, 热载回调 |
+| **M3. I/O 接口与端点注册** | Input/Output 抽象接口、端点注册（启动时+运行时）、主端点约定 | readInput( endpoint? ), writeOutput( content, endpoint? ) |
+| **M4. Memory（接口+实现）** | 记忆接口定义、近期记忆/TASKS/Daily Log 实现、与 SCL 对接 | MemoryService 接口，Recent + TASKS + Mem0 实现 |
+| **M5. Mem0 客户端** | 连接全局 Mem0、按 agent_id 隔离 add/search | add( user_id, content ), search( user_id, query ) |
+| **M6. Loop Scheduler** | 三种模式（快速/定时/单次）、触发、防空转退避、无 input 时 SCL 控制提示词 | runOnce() / startLoop(mode) |
+| **M7. R-CCAM Runner** | 单轮执行：R→C→C→A→M、ReCAP、Control 标记缺口、调用 pi-mono | runOneCycle( userMessage ) → 本轮结果 |
+| **M8. Tools** | read_file, write_file, shell_exec, web_search, get_time, reply_to_user, run_agent；能力缺口标记 | 供 pi-mono 调用的工具列表 + 元规则 |
+| **M9. pi-mono 适配** | 注入 system/user、工具挂载、会话复用策略 | 调用 pi-mono 跑一轮推理+工具 |
+| **M10. Entry / CLI** | 解析参数、初始化各模块、启动单次或 Loop | 进程入口 |
+| **M11. Logger（独立日志）** | 结构化日志写入、按日滚动文件、供所有模块统一调用 | `log(level, module, event, data)` |
+
+---
+
+## 二、各模块详细设计
+
+### M1. Identity & Paths
+
+**职责**
+
+- 根据本机 MAC + 身份路径计算 **agent_id**（哈希，实现自定，如 SHA256 取前 16 字符）。
+- 解析并保证：**临时目录** = `<全局临时目录>/<agent_id>/`；**工作目录** = 单独传入（另一项目根）。
+- **路径独占**：同一身份路径仅允许一个运行中实例（锁文件或 pid 文件）。
+
+**输入**
+
+- 身份路径 `path`（如来自 `--dir`）。
+- 全局临时目录根（环境变量或配置，如 `OPENKURONEKO_TMP`）。
+- 工作目录（如 `--workspace` 或配置文件）。
+
+**输出 / 对外提供**
+
+- `agentId: string`
+- `tempDir: string`（绝对路径）
+- `workspaceDir: string`（绝对路径）
+- `acquirePathLock(path): boolean` / `releasePathLock(path): void`（或等价）
+
+**实现要点**
+
+- agent_id 需稳定：同一 (MAC, path) 始终得到同一 id。
+- 临时目录若不存在则创建；工作目录必须存在或明确允许自动创建。
+- 单次 run（`--once`）时，可在进程退出时释放锁；Loop 模式在进程生命周期内持锁。
+
+**依赖**
+
+- 无（仅系统 API：网络/MAC、文件系统、可选锁库）。
+
+---
+
+### M2. Config & Soul
+
+**职责**
+
+- 加载全局与 agent 本地配置（LLM、Mem0、全局临时目录、默认工作目录等）；优先级：CLI > 本地 config > 全局 config > 环境变量。
+- 从临时目录读取 **SOUL.md**（或约定文件名），作为 system 的人设/规则片段。
+- **热载**：监听 Soul 文件变更（如 chokidar），在**下一轮**生效，不中断当前轮。
+
+**输入**
+
+- `tempDir`（agent 临时目录，Soul 与本地 config 所在）。
+- 全局 config 路径（可选）。
+- CLI 覆盖项（可选）。
+
+**输出 / 对外提供**
+
+- `getConfig(): Config`（含 LLM、Mem0、路径、循环参数等）。
+- `getSoul(): string`（当前 Soul 文本）。
+- `onSoulReload(callback: () => void)`：热载时回调，Runner 在下一轮用新 Soul 拼 system。
+
+**实现要点**
+
+- Soul 热载仅更新内存中的 soul 文本；下一轮 R-CCAM 开始时再拼进 system。
+- system 拼接顺序建议：soul 全文 + 近期记忆摘要 + Mem0 检索结果 + 固定尾段（如「你必须用 reply_to_user 回复」）。
+
+**依赖**
+
+- M1（tempDir）。
+
+---
+
+### M3. I/O 接口与端点注册
+
+**职责**
+
+- 定义 **Input** / **Output** 抽象接口（单生产者-单消费者、可读/可写）。
+- 支持**多端点**（如 `default`、`user`、`agent_b`）；约定**主端点**（如 `default`）供 reply_to_user 与单次 run 默认使用。
+- **启动时指定**：CLI 或配置文件声明端点及实现（如文件路径、队列名）。
+- **运行时注册**：提供 API 或回调，向已运行 agent 注册新端点（如 `registerInputEndpoint(id, impl)`）。
+
+**接口形态（建议）**
+
+```ts
+// 抽象
+interface IInputEndpoint {
+  read(): Promise<string>;   // 无内容可返回空串或实现约定
+  consume?(): Promise<void>; // 读后消费（可选，依实现）
+}
+interface IOutputEndpoint {
+  write(content: string): Promise<void>;
+}
+
+interface IIORegistry {
+  getInput(endpointId?: string): IInputEndpoint;   // 缺省即主端点
+  getOutput(endpointId?: string): IOutputEndpoint;
+  registerInput(endpointId: string, impl: IInputEndpoint): void;
+  registerOutput(endpointId: string, impl: IOutputEndpoint): void;
+}
+```
+
+**实现**
+
+- 至少提供**文件实现**：主端点对应临时目录下 `input` / `output` 文件（或 `in/default`、`out/default`）；读后 truncate、写覆盖。
+- 编码：UTF-8；格式首版可为纯文本。
+
+**依赖**
+
+- M1（tempDir，用于文件实现默认路径）。
+
+---
+
+### M4. Memory（接口+实现）
+
+**职责**
+
+- 定义与 **SCL 记忆语义** 对接的**接口**（TASKS、Daily Log、近期摘要、长期记忆的读/写），使 SCL 侧不关心底层是文件还是 Mem0。
+- **实现**：近期记忆（如 recent_memory.jsonl 或按日 Daily Log）、TASKS（结构化 Markdown 或 JSON）、Daily Log 写入；长期语义记忆通过 Mem0 接口（见 M5）。
+- 存储位置：agent **临时目录** 下（与配置、Soul 一致）。
+
+**接口形态（建议）**
+
+```ts
+interface IMemoryService {
+  // 近期 + TASKS
+  getTasks(): Promise<string>;           // TASKS 内容，无则空或默认结构
+  setTasks(content: string): Promise<void>;
+  appendDailyLog(entry: string): Promise<void>;
+  getRecentSummary(limit?: number): Promise<string[]>;
+  appendRecentSummary(entry: string): Promise<void>;
+
+  // 长期（可委托给 Mem0 客户端）
+  searchLongTerm(query: string, limit?: number): Promise<string[]>;
+  addLongTerm(content: string, metadata?: Record<string, unknown>): Promise<void>;
+}
+```
+
+**实现要点**
+
+- TASKS、Daily Log 文件放在 `tempDir` 下（如 `TASKS.md`、`memory/YYYY-MM-DD.md`）；格式与 SCL 约定一致，便于 R-CCAM 的 R/M 阶段读写。
+- **记忆接口** 由本模块实现，R-CCAM Runner 与工具层通过接口访问，不直接碰文件路径（便于以后换存储）。
+
+**依赖**
+
+- M1（tempDir）；M5（长期记忆可委托 Mem0）。
+
+---
+
+### M5. Mem0 客户端
+
+**职责**
+
+- 连接**全局单实例** Mem0 服务；所有 agent 共用同一服务。
+- 每次调用 **add** / **search** 时传入 **user_id = agent_id**，实现按 agent 隔离。
+- 配置来自 M2（endpoint、API key 等）。
+
+**接口**
+
+- `add(userId: string, content: string, metadata?: object): Promise<void>`
+- `search(userId: string, query: string, limit?: number): Promise<SearchResult[]>`
+
+**实现要点**
+
+- 仅封装 HTTP/SDK 调用；不持有会话状态。
+- 若 Mem0 不可用，建议写日志并返回空结果或可配置降级，不阻塞 R-CCAM。
+
+**依赖**
+
+- M2（配置）；无 M1 直接依赖（agent_id 由调用方传入）。
+
+---
+
+### M6. Loop Scheduler
+
+**职责**
+
+- **三种模式**：
+  - **单次**：执行一轮后进程退出。
+  - **快速循环**：上一轮结束立即下一轮；**防空转退避**：连续 N 轮无新 input 且无实质工具调用/状态变更时，增加间隔（如指数退避，上限可配置）。
+  - **定时循环**：按固定间隔（如 30min）或 cron 触发；无 input 时仍可跑，本轮 user 输入使用 **SCL 控制提示词**（如 HEARTBEAT 检查清单或等效）。
+- 每轮开始：从主 input 端点读（若有）；若无则使用 SCL 控制提示词作为本轮 user 输入。
+- 调用 M7 执行一轮；根据模式决定是否继续循环或退出。
+
+**输入**
+
+- 运行模式：`once` | `fast` | `interval` | `cron`。
+- 间隔/cron 配置（来自 M2 或 CLI）。
+- 退避参数（N 轮、初始间隔、上限）。
+
+**输出 / 行为**
+
+- `runOnce()`：读 input（或 SCL 控制提示词）→ 调 M7.runOneCycle() → 写 output（由工具 reply_to_user 或 Runner 收尾写）→ 退出。
+- `startLoop(mode)`：循环执行上述过程；快速循环时根据「是否有新 input / 是否有实质动作」决定是否退避。
+
+**依赖**
+
+- M3（I/O 读 input、写 output）；M7（R-CCAM Runner）；M2（Soul/配置，用于 SCL 控制提示词路径或内容）。
+
+---
+
+### M7. R-CCAM Runner
+
+**职责**
+
+- 实现**单轮** R-CCAM + ReCAP：R(Retrieval) → C(Cognition) → C(Control) → A(Action) → M(Memory)。
+- **R**：从 M4 读 TASKS、近期摘要；从 M5 做 Mem0 search；组装进 context。
+- **C (Cognition)**：调用 pi-mono 做决策；若无任务树或需重分解则执行 ReCAP（生成/更新 TASKS）；选择当前节点作为本轮目标。
+- **C (Control)**：执行前验证（范围、约束、风险、工具可用性）；若工具缺失则**仅标记缺口**，不在本轮执行自举。
+- **A**：执行单步行动（pi-mono 工具调用）。
+- **M**：写 Daily Log、更新 TASKS、可选 Mem0 add；若有 reply_to_user 则写 output。
+- 无 input 时，本轮 user 输入由 Scheduler 传入（SCL 控制提示词）。
+
+**输入**
+
+- `userMessage: string`（本轮 user 输入，来自 input 或 SCL 控制提示词）。
+- 当前 system（由 M2 Soul + 记忆摘要 + Mem0 结果 + 固定尾段拼接）。
+
+**输出**
+
+- 本轮执行完毕；output 由工具 reply_to_user 或 Runner 在 M 阶段写入；错误视为正常结果写入 output。
+
+**实现要点**
+
+- ReCAP 逻辑可在 Cognition 阶段内用 prompt + 工具（读/写 TASKS）完成。
+- Control 阶段若发现工具缺失，写入「能力缺口」标记（如 TASKS 或内存状态），下一轮由 capability_gap_handler 元规则触发自举（web_search + write_file 等）。
+
+**依赖**
+
+- M2（Soul、config）；M3（I/O）；M4（Memory）；M5（Mem0）；M8（Tools）；M9（pi-mono 适配）。
+
+---
+
+### M8. Tools
+
+**职责**
+
+- 实现 Work Agent 所需工具：**read_file**、**write_file**、**edit_file**（或 read+write）、**shell_exec**、**web_search**、**get_time**、**reply_to_user**、**run_agent**。
+- **read_file / write_file**：工作目录内文件 + 通过 M4 记忆接口读写 TASKS、Daily Log 等（或直接读临时目录内文件，由 M4 实现约定）。
+- **shell_exec**：限制在**工作目录**或白名单内。
+- **reply_to_user(content)**：写 M3 的**主 output** 端点。
+- **run_agent**：向指定子路径写 input、exec 同程序 `--once --dir <path>`、等退出、读子 output；path 由参数传入。
+- **Mem0**：对 M5 的封装，add/search 时传入当前 agent_id。
+- **capability_gap_handler**：元规则；当 Action 因工具缺失失败时，**本轮仅标记缺口**（写 TASKS 或状态）；**下一轮**再执行自举（web_search、write_file 新 Skill 等）。
+
+**接口**
+
+- 以 pi-mono 可调用的工具列表形式暴露（名称、参数、实现函数）；reply_to_user、run_agent、Mem0 由本系统实现并注入。
+
+**依赖**
+
+- M1（workspaceDir、tempDir、agentId）；M3（I/O）；M4（Memory）；M5（Mem0）。
+
+---
+
+### M9. pi-mono 适配
+
+**职责**
+
+- 将 **system**（Soul + 记忆摘要 + Mem0 结果 + 固定尾段）与 **user message** 注入 pi-mono。
+- 注册 M8 提供的工具；处理工具调用结果并写回 output（若为 reply_to_user）。
+- **会话生命周期**：单次 run 用新会话；Loop 模式可选复用同一会话，并在每轮注入近期记忆摘要以控制上下文长度。
+
+**输入**
+
+- system 文本、user message、工具列表。
+
+**输出**
+
+- 本轮 model 输出与工具调用序列；Runner 据此执行 M 阶段并结束本轮。
+
+**实现要点**
+
+- 需查阅 pi-mono 文档，确认如何注入 system/user、如何注册自定义工具、是否支持会话复用。
+- 若 pi-mono 无内置 read_file/write_file，由本系统实现并注入；若有则可用其实现，但需限定路径在工作目录与临时目录。
+
+**依赖**
+
+- M2（config，LLM）；M8（Tools）。
+
+---
+
+### M10. Entry / CLI
+
+**职责**
+
+- 解析命令行：`--once`、`--loop fast|interval|cron`、`--dir`、`--workspace`、`--config`、`--interval`、`--cron` 等。
+- 初始化 M1→M11→M2→M3→M4→M5→M8→M9→M7→M6（M11 Logger 紧跟 M1，其余模块均已可写日志）。
+- 路径独占：启动时 M1 加锁，若失败则退出并提示。
+- 根据模式调用 M6.runOnce() 或 M6.startLoop(mode)。
+
+**依赖**
+
+- 所有模块。
+
+---
+
+### M11. Logger（独立日志）
+
+**职责**
+
+- 提供**结构化日志**（JSON Lines），所有模块统一通过本模块写日志；**禁止在其他模块直接 console.log**。
+- 日志落地：`<全局临时目录>/<agent_id>/logs/YYYY-MM-DD.jsonl`，**追加写入**，保证崩溃前已落盘行不丢失。
+- 按日滚动，保留天数可配置（默认 7 天）。
+
+**日志结构**
+
+```json
+{
+  "ts": "2026-03-05T10:00:00.000Z",
+  "level": "info",
+  "module": "r-ccam",
+  "agentId": "a1b2c3d4e5f6",
+  "event": "cycle.start",
+  "data": { "round": 12, "mode": "fast", "inputPreview": "帮我..." }
+}
+```
+
+**级别**：`debug | info | warn | error`
+
+**必须记录的事件**
+
+| 事件 | 级别 | 模块 |
+|------|------|------|
+| 每轮 R-CCAM 开始 / 结束 | info | r-ccam |
+| 工具调用（名称、参数摘要、结果摘要） | info | tools |
+| TASKS 更新 / Daily Log 写入 | debug | memory |
+| Input 读取 / Output 写入（含端点 id、内容摘要） | info | io |
+| 能力缺口标记 | warn | tools |
+| 下轮自举触发（web_search + write_file） | warn | tools |
+| 错误（工具失败、LLM 不可用、崩溃）含堆栈 | error | * |
+| Soul 热载（文件变更时间） | info | soul |
+| 路径锁获取 / 释放 | info | identity |
+| 子 Agent 启动 / 退出（含路径、exit code） | info | tools |
+| Mem0 add / search（含 user_id、摘要） | debug | mem0 |
+| Loop 模式切换 / 退避触发 | info | loop |
+
+**接口形态**
+
+```ts
+interface ILogger {
+  debug(module: string, event: string, data?: object): void;
+  info(module: string, event: string, data?: object): void;
+  warn(module: string, event: string, data?: object): void;
+  error(module: string, event: string, data?: object): void;
+}
+```
+
+**实现要点**
+
+- **同步写入或行缓冲**（不要纯异步写入）：保证进程崩溃时最近一批日志已落盘。
+- 文件路径：`<tempDir>/logs/YYYY-MM-DD.jsonl`，目录不存在则创建。
+- 全局单例：由 M10 在 M1 初始化后立即创建，通过注入（或全局导出）供所有模块使用。
+
+**依赖**
+
+- M1（tempDir、agentId）；无其他依赖（避免循环）。
+
+---
+
+## 三、数据流与生命周期
+
+### 3.1 单次 run（--once）
+
+1. CLI 解析 → M1 计算 agent_id、tempDir、workspaceDir，并加路径锁 → **M11 Logger 立即初始化**（后续所有步骤均已可写日志）。
+2. M2 加载 config、Soul；M3 初始化 I/O（至少主端点）；M4/M5 初始化记忆与 Mem0 客户端；M8 注册工具；M9 初始化 pi-mono。
+3. M6.runOnce()：
+   - 从 M3 主 input 读（若无内容可为空或由实现约定）；
+   - M7.runOneCycle(userMessage) 执行 R→C→C→A→M；
+   - output 由 reply_to_user 或 M 阶段写入 M3 主 output。
+4. 释放路径锁，进程退出。
+
+### 3.2 Loop（快速 / 定时）
+
+1. 初始化同单次；M6.startLoop(mode)。
+2. 每轮：
+   - 若定时/快速且无 input：userMessage = SCL 控制提示词（如 HEARTBEAT 内容）；
+   - 若有 input：从 M3 主 input 读并 consume；
+   - M7.runOneCycle(userMessage)；
+   - 快速循环：若连续 N 轮空转则退避再下一轮；否则立即下一轮。
+3. 进程常驻直到外部终止或配置的退出条件。
+
+### 3.3 子 agent（run_agent）
+
+- 父 agent 通过 M8.run_agent 写入子 path 的 input、exec 同二进制 `--once --dir <子 path>`、等退出、读子 output。
+- 子进程内 M1 用子 path 计算子 agent_id，使用子临时目录与可选子工作目录；与父完全隔离。
+
+---
+
+## 四、实现顺序建议
+
+| 阶段 | 模块 | 说明 |
+|------|------|------|
+| **P0** | M1 Identity & Paths | 所有模块依赖路径与 agent_id；先实现锁与目录解析。 |
+| **P0** | **M11 Logger** | M1 完成后立即实现；后续所有模块均依赖日志输出。 |
+| **P0** | M2 Config & Soul | 配置与 Soul 加载；热载可后补。 |
+| **P0** | M3 I/O 接口 + 文件实现 | 至少主端点、读后消费、写覆盖；运行时注册可后补。 |
+| **P1** | M4 Memory 接口 + 简单实现 | TASKS.md、Daily Log 文件读写；近期摘要用 JSONL 或按日文件。 |
+| **P1** | M5 Mem0 客户端 | 全局单实例，user_id=agent_id。 |
+| **P1** | M8 Tools（不含 run_agent 与自举） | read_file、write_file、shell_exec、get_time、reply_to_user；先不实现 web_search、run_agent、自举。 |
+| **P2** | M9 pi-mono 适配 | 注入 system/user、注册工具、跑一轮。 |
+| **P2** | M7 R-CCAM Runner（最小版） | R：读 TASKS + 近期；C：一次推理；C：简单校验；A：工具调用；M：写 Daily Log、更新 TASKS、reply_to_user。ReCAP 与 Control 可先简化。 |
+| **P2** | M6 Loop Scheduler | 单次 + 定时循环；快速循环与退避可后补。 |
+| **P2** | M10 Entry / CLI | 串起上述模块。 |
+| **P3** | M8 补全 | web_search、run_agent、capability_gap_handler（标记缺口 + 下轮自举）。 |
+| **P3** | M7 补全 | ReCAP 分解、Control 完整校验、能力缺口与自举衔接。 |
+| **P3** | M6 快速循环与退避 | 防空转退避参数可配置。 |
+
+---
+
+## 五、接口契约摘要（编码对照）
+
+| 契约 | 说明 |
+|------|------|
+| **协议先行** | 任何模块间接口/协议开发前，先在 `doc/protocols/<name>.md` 确定协议文档，再开始编码。 |
+| **日志** | 所有模块通过 M11 Logger 写结构化日志（JSON Lines），落 `<tempDir>/logs/YYYY-MM-DD.jsonl`；**禁止直接 console.log**。 |
+| **agent_id** | `hash(MAC + path)`，实现自定（如 SHA256 取前 16 字符）；用于临时目录名、Mem0 user_id。 |
+| **临时目录** | `<全局临时目录>/<agent_id>/`；内存放配置、记忆、Soul、可选 input/output 文件。 |
+| **工作目录** | 与临时目录分离；read_file、write_file、shell_exec 限定在此或白名单。 |
+| **主端点** | input/output 默认端点 id（如 `default`）；单次 run 与 reply_to_user 使用主端点。 |
+| **input 消费** | 读后 consume（如文件 truncate 或队列 dequeue）；单生产者-单消费者。 |
+| **output** | 写覆盖；错误视为正常结果写入同一 output，由 SCL/调用方处理。 |
+| **能力缺口** | 本轮仅标记；下一轮再执行 web_search + write_file 等自举。 |
+| **无 input** | 使用 SCL 控制提示词（如 HEARTBEAT）作为本轮 user 输入。 |
+| **Mem0** | 全局单实例；add/search 带 user_id=agent_id，逻辑隔离。 |
+
+---
+
+以上模块设计可直接作为任务拆分与代码结构的依据；实现时遇歧义以《轻量多 Agent 系统设计》与《待细化设计清单》为准。

@@ -1,0 +1,32 @@
+[
+  {
+    "user_id": "alice",
+    "display_name": "alice",
+    "role": "member",
+    "channels": [
+      {
+        "channel_id": "webchat",
+        "raw_id": "alice",
+        "priority": 1,
+        "avg_response_ms": 0
+      }
+    ],
+    "created_at": 1772983979638,
+    "last_seen_at": 1772986010999
+  },
+  {
+    "user_id": "bob",
+    "display_name": "bob",
+    "role": "member",
+    "channels": [
+      {
+        "channel_id": "webchat",
+        "raw_id": "bob",
+        "priority": 1,
+        "avg_response_ms": 0
+      }
+    ],
+    "created_at": 1772984272497,
+    "last_seen_at": 1772987609745
+  }
+]

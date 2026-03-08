@@ -1,0 +1,39 @@
+[1] GitHub - rytilahti/python-miio: Python library & console tool for ...
+    URL: github.com/rytilahti/python-miio
+    python-miio This library (and its accompanying cli tool, miiocli) can be used to control devices using Xiaomi&#x27;s miIO and MIoT protocols. This is a voluntary, community-driven effort and is not affiliated with any of the companies whose devices are supported by this library. Issue reports and pull requests are welcome, see contributing!
+
+[2] Installation — python-miio documentation
+    URL: python-miio.readthedocs.io/en/latest/
+    History This project was started to allow controlling locally available Xiaomi Vacuum cleaner robot with Python (hence the old name python -mirobo), however, thanks to contributors it has been extended to allow controlling other Xiaomi devices using the same protocol miIO protocol. (another source for vacuum-specific documentation)
+
+[3] python-miio · PyPI
+    URL: pypi.org/project/python-miio/
+    API usage All functionality is accessible through the miio module: from miio import RoborockVacuum vac = RoborockVacuum("<ip address>", "<token>") vac.start() Each separate device type inherits from miio .Device (and in case of MIoT devices, miio .MiotDevice) which provides a common API .
+
+[4] 使用Python基于Onvif控制家用摄像头云台转动_tplink监控 ptz-CSDN博客
+    URL: blog.csdn.net/chengpei147/article/details/153315360
+    onvif-zeep 操作云台我这里是用的Python的一个依赖库：onvif-zeep，可以用来与支持 ONVIF 协议的网络摄像头或录像机 进行交互，它可以让你在 Python 中轻松实现 发现设备、获取视频流、云台控制（ PTZ ）、事件订阅 等操作。 主要就使用云台控制相关的 API ，直接放代码：
+
+[5] Python onvif PTZ控制_mob64ca12f73101的技术博客_51CTO博客
+    URL: blog.51cto.com/u_16213460/7865724
+    Python onvif PTZ控制，#PythononvifPTZ控制##概述PTZ（Pan-Tilt-Zoom）是指摄像机的云台控制功能，可以实现摄像机的旋转、俯仰和变焦等操作。在Python中，我们可以使用onvif库来控制PTZ功能。本文将介绍如何使用Python和onvif库来控制摄像机的PTZ功能，并给出相应的代码示例。##安装onvif库首先，我们需要安装onvif ...
+
+[6] python-miio: 用于控制小米智能家电的 Python 库 - Gitee
+    URL: gitee.com/watching/python-miio
+    python-miio This library (and its accompanying cli tool, miiocli) can be used to control devices using Xiaomi&#x27;s miIO and MIoT protocols. This is a voluntary, community-driven effort and is not affiliated with any of the companies whose devices are supported by this library. Issue reports and pull requests are welcome, see contributing!
+
+[7] 如何用Python-miio控制小米智能设备？2025完整入门指南 -CSDN博客
+    URL: blog.csdn.net/gitblog_00438/article/details/153917839
+    文章浏览阅读1k次，点赞17次，收藏22次。**Python-miio**是一款强大的开源工具，让你轻松通过Python代码或命令行掌控小米智能家电。无论是扫地机器人、空气净化器还是智能灯泡，它都能完美支持miIO和MIoT协议，让你的智能家居设备秒变可编程的「智能伙伴」!## ???? 为什么选择 Python-miio ？核心优势解析 ...
+
+[8] Python编程：轻松掌握PTZ控制技术全攻略 - 云原生实践
+    URL: www.oryoy.com/news/python-bian-cheng-qing-song-zhang-wo-ptz-kong-zhi-ji-shu-quan-gong-lve.html
+    引言 随着视频监控技术的不断发展，云台控制（PTZ，Pan-Tilt-Zoom）技术已成为视频监控系统中不可或缺的一部分。 通过Python编程，我们可以轻松实现PTZ控制，实现对摄像头的全方位控制。 本文将详细介绍如何利用Python进行PTZ控制技术的实现。
+
+[9] python ONVIF 控制云台_mob649e8163af7d的技术博客_51CTO博客
+    URL: blog.51cto.com/u_16175497/12236031
+    python ONVIF 控制云台，#PythonONVIF控制云台在现代监控系统中，云台摄像机因其灵活的运动能力而被广泛应用。通过控制云台，用户可随时调整摄像机的视角，以便覆盖更大的监控区域。本文将介绍如何使用Python控制支持ONVIF协议的云台摄像机，并提供详细的代码示例。##什么是ONVIF？ONVIF ...
+
+[10] GitHub - owenkuo21/python-miIO: Python library & console tool for ...
+    URL: github.com/owenkuo21/python-miIO
+    API usage All functionality is accessible through the miio module: from miio import Vacuum vac = Vacuum("<ip address>", "<token>") vac.start() Each separate device type inherits from miio .Device (and in case of miOT devices, miio .MiotDevice) which provides common API . Please refer to API documentation for more information.

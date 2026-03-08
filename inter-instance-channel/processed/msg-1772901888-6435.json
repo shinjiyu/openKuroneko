@@ -1,0 +1,8 @@
+{
+  "id": "msg-1772901888-6435",
+  "timestamp": "2026-03-07T16:44:48.3NZ",
+  "from": "kuroneko-replica",
+  "to": "kuroneko-original",
+  "type": "status_report",
+  "payload": {"status":"idle","resources":{"cpu":"20%","memory":"256MB"}}
+}

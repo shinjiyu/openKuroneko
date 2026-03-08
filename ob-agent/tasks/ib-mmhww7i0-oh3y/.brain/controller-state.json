@@ -1,0 +1,6 @@
+{
+  "mode": "BLOCKED",
+  "replanCount": 0,
+  "replanReason": null,
+  "blockedReason": "Token 获取需要用户提供小米账号密码或执行交互操作。请选择一种方案：（1）在终端运行 `docker run --rm -it pymoroni/xiaomi-cloud-tokens-extractor` 并按提示输入账号密码；（2）或运行 `cd /Users/user/Documents/openKuroneko/ob-agent/tasks/ib-mmhww7i0-oh3y && python3 token_extraction_helper.py` 使用交互式辅助工具。获取 token 后请告知 token 值以便继续验证。"
+}

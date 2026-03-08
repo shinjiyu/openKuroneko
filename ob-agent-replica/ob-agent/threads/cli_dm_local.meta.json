@@ -1,0 +1,8 @@
+{
+  "thread_id": "cli:dm:local",
+  "channel_id": "cli",
+  "type": "dm",
+  "peer_id": "local",
+  "created_at": 1772897267559,
+  "last_msg_at": 1772897267559
+}

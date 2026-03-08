@@ -1,0 +1,9 @@
+{
+  "id": "kuroneko-original",
+  "work_dir": "/Users/user/Documents/openKuroneko/chat-agent",
+  "port": 8091,
+  "role": "primary",
+  "registered_at": "2026-03-07T16:44:35Z",
+  "last_heartbeat": "2026-03-07T16:44:35Z",
+  "status": "active"
+}

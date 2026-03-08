@@ -24,17 +24,24 @@ export interface Milestone {
   status: 'Active' | 'Pending' | 'Completed';
   title: string;
   description: string;
+  /** 循环里程碑：每次 CYCLE_DONE 后等待该时长（ms）再重新执行 */
+  cyclic?: boolean;
+  cycleIntervalMs?: number;
 }
 
 // ── 控制器状态 ────────────────────────────────────────────────────────────────
 
-export type ControllerMode = 'DECOMPOSE' | 'EXECUTE' | 'ATTRIBUTE' | 'BLOCKED';
+export type ControllerMode = 'DECOMPOSE' | 'EXECUTE' | 'ATTRIBUTE' | 'BLOCKED' | 'SLEEPING';
 
 export interface ControllerState {
   mode: ControllerMode;
   replanCount: number;
   replanReason: string | null;
   blockedReason: string | null;
+  /** SLEEPING 模式：唤醒时间（ISO 8601） */
+  sleepUntil?: string | null;
+  /** 当前循环里程碑已完成的循环次数 */
+  cycleCount?: number;
 }
 
 // ── 执行上下文（EXECUTE → ATTRIBUTE 传递） ───────────────────────────────────
@@ -421,6 +428,16 @@ export class BrainFS {
     return milestones.length > 0 && milestones.every(m => m.status === 'Completed');
   }
 
+  /**
+   * 循环里程碑：本轮结束后不标记 Completed，只是准备下一轮。
+   * 里程碑状态保持 Active，Controller 进入 SLEEPING 等待。
+   * （普通里程碑请用 markMilestoneCompleted）
+   */
+  keepCyclicMilestoneActive(_id: string): void {
+    // 里程碑状态不变（仍为 Active），无需修改 milestones.md
+    // 此方法作为语义占位，Controller 调用它表明这是循环里程碑逻辑
+  }
+
   // ── goal.md 中读取 max_replan 参数 ──────────────────────────────────────────
 
   parseMaxReplan(): number {
@@ -492,11 +509,34 @@ function tokenize(text: string): Set<string> {
 }
 
 function defaultState(): ControllerState {
-  return { mode: 'DECOMPOSE', replanCount: 0, replanReason: null, blockedReason: null };
+  return { mode: 'DECOMPOSE', replanCount: 0, replanReason: null, blockedReason: null, sleepUntil: null, cycleCount: 0 };
 }
 
-/** 解析单行里程碑，格式：[M1] [Active]  <title> — <desc> */
+/**
+ * 解析单行里程碑。
+ *
+ * 支持两种格式：
+ *   普通：[M1] [Active]           Title — Description
+ *   循环：[M1] [Active] [cyclic:N] Title — Description
+ *
+ * N 为循环间隔毫秒数，例如 [cyclic:86400000] = 24 小时。
+ */
 export function parseMilestoneLine(line: string): Milestone | null {
+  // 先尝试带 cyclic 标签的格式
+  const cyclic = line.match(
+    /^\s*\[(\w+)\]\s+\[(Active|Pending|Completed)\]\s+\[cyclic:(\d+)\]\s+(.+?)\s+[—–-]\s+(.+)\s*$/u
+  );
+  if (cyclic && cyclic[1] && cyclic[2] && cyclic[3] && cyclic[4] && cyclic[5]) {
+    return {
+      id:              cyclic[1],
+      status:          cyclic[2] as 'Active' | 'Pending' | 'Completed',
+      title:           cyclic[4].trim(),
+      description:     cyclic[5].trim(),
+      cyclic:          true,
+      cycleIntervalMs: parseInt(cyclic[3], 10),
+    };
+  }
+
   // Accept em-dash, en-dash, or ` - ` as separator
   const m = line.match(
     /^\s*\[(\w+)\]\s+\[(Active|Pending|Completed)\]\s+(.+?)\s+[—–-]\s+(.+)\s*$/u

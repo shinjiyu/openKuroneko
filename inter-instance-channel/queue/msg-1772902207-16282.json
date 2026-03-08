@@ -1,0 +1,8 @@
+{
+  "id": "msg-1772902207-16282",
+  "timestamp": "2026-03-07T16:50:07.3NZ",
+  "from": "kuroneko-replica",
+  "to": "kuroneko-original",
+  "type": "ack",
+  "payload": {"status":"received","original_msg":"msg-1772902207-22701"}
+}

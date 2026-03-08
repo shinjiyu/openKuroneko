@@ -1,0 +1,100 @@
+#!/usr/bin/env node
+/**
+ * 外脑 CLI 入口
+ *
+ * Usage:
+ *   kuroneko-ob --dir <obDir> --inner-dir <innerAgentDir>
+ *               [--soul <path/to/soul.md>]
+ *               [--webchat-port <port>]
+ *               [--feishu-app-id <id> --feishu-app-secret <secret> --feishu-verify-token <token>]
+ *               [--feishu-port <port>]
+ *               [--escalation-wait-ms <ms>]
+ *
+ * 独立进程：内脑（kuroneko --dir ...）和外脑分别运行。
+ * 外脑通过 <innerTempDir>/input、directives、output、status 文件与内脑通信。
+ *
+ * 示例：
+ *   # 仅 CLI 模式（调试用）
+ *   kuroneko-ob --dir ./ob-agent --inner-dir ./chat-agent
+ *
+ *   # 同时开启 WebChat（端口 8091）
+ *   kuroneko-ob --dir ./ob-agent --inner-dir ./chat-agent --webchat-port 8091
+ *
+ *   # 同时接入飞书
+ *   kuroneko-ob --dir ./ob-agent --inner-dir ./chat-agent \
+ *     --feishu-app-id cli_xxx --feishu-app-secret xxx --feishu-verify-token xxx
+ */
+
+import { Command } from 'commander';
+import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
+
+import { resolveIdentity, acquirePathLock, releasePathLock } from '../identity/index.js';
+import { loadConfig } from '../config/index.js';
+import { createLogger } from '../logger/index.js';
+import { createOpenAIAdapter } from '../adapter/index.js';
+import { createOuterBrain, InnerBrainManager } from '../outer-brain/index.js';
+import { CliChannelAdapter } from '../channels/adapters/cli.js';
+import { FeishuChannelAdapter } from '../channels/adapters/feishu.js';
+import { WebchatChannelAdapter } from '../channels/adapters/webchat.js';
+
+// ── CLI 定义 ──────────────────────────────────────────────────────────────────
+
+const program = new Command();
+
+program
+  .name('kuroneko-ob')
+  .description('openKuroneko 外脑（Outer Brain）— 多频道人类交互层')
+  .requiredOption('--dir <path>', '外脑工作目录（存储 threads/、users.json、soul.md）')
+  .requiredOption('--inner-dir <path>', '内脑 agent 目录（同 kuroneko --dir 的值）')
+  .option('--soul <path>', 'soul.md 路径（默认 <dir>/soul.md）')
+  .option('--webchat-port <port>', '开启 WebChat 频道，监听指定端口（如 8091）')
+  .option('--webchat-cors <origin>', 'WebChat CORS 允许来源（默认 "*"）')
+  .option('--agent-name <name>', 'Agent 在群聊中被 @ 的名字（默认 "Kuroneko"）')
+  .option('--feishu-app-id <id>', '飞书 App ID')
+  .option('--feishu-app-secret <secret>', '飞书 App Secret')
+  .option('--feishu-verify-token <token>', '飞书事件验证 Token')
+  .option('--feishu-encrypt-key <key>', '飞书消息加密 Key（可选）')
+  .option('--feishu-port <port>', '飞书 Webhook 监听端口（默认 8090）')
+  .option('--feishu-agent-open-id <id>', '外脑的飞书 open_id（用于过滤自身消息）')
+  .option('--escalation-wait-ms <ms>', 'BLOCK 升级等待时间（ms，默认 1800000=30min）')
+  .option(
+    '--inner-cmd <cmd>',
+    '内脑启动命令（set_goal 时自动拉起）。\n' +
+    '例："node dist/cli/index.js --dir ./chat-agent --loop fast"\n' +
+    '不填则内脑需手动启动。',
+  )
+  .option(
+    '--fast-model <model>',
+    '用于群聊参与决策（SPEAK/SILENT 分类）的快速模型名称。\n' +
+    '建议使用无 thinking 的 flash 级模型，如 glm-4-flash。\n' +
+    '不填则使用与主对话相同的模型（慢但无需额外配置）。',
+  )
+  .option('--no-cli', '禁用 CLI 频道（默认启用）')
+  .parse(process.argv);
+
+const opts = program.opts<{
+  dir:                  string;
+  innerDir:             string;
+  soul?:                string;
+  webchatPort?:         string;
+  webchatCors?:         string;
+  agentName?:           string;
+  feishuAppId?:         string;
+  feishuAppSecret?:     string;
+  feishuVerifyToken?:   string;
+  feishuEncryptKey?:    string;
+  feishuPort?:          string;
+  feishuAgentOpenId?:   string;
+  escalationWaitMs?:    string;
+  innerCmd?:            string;
+  fastModel?:           string;
+  cli:                  boolean;
+}>(); 
+
+// ── Bootstrap ──────────────────────────────────────────────────────────────────
+
+async function main() {
+  const obDir      = path.resolve(opts.dir);
+  const innerDir   = path.resolve(opts.innerDir);

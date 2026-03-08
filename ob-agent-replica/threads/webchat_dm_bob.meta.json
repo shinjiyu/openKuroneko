@@ -1,0 +1,8 @@
+{
+  "thread_id": "webchat:dm:bob",
+  "channel_id": "webchat",
+  "type": "dm",
+  "peer_id": "bob",
+  "created_at": 1772896908838,
+  "last_msg_at": 1772896908838
+}

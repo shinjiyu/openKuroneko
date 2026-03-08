@@ -1,0 +1,226 @@
+# 小米摄像头连接测试报告
+
+**测试时间**: 2026-03-08 23:55 +0800  
+**目标设备**: 192.168.31.25 (疑似小米摄像头)  
+**测试目的**: 验证与摄像头的通信连接，测试视频流获取和 PTZ 控制功能  
+
+---
+
+## 一、网络连通性测试
+
+### 1.1 ICMP 测试
+```
+✓ 设备在线，延迟 206ms
+✓ MAC 地址: 54:48:e6:2f:1d:3c
+✓ 厂商: Shanghai Imilab Technology Co.Ltd（小米摄像头制造商）
+```
+
+### 1.2 UDP 端口测试
+```
+✓ UDP 54321 端口（miIO 协议）: 开放
+✓ 成功收到 miIO 响应（32 字节）
+```
+
+响应数据示例：
+```
+21310020000000000ed8c6bc006cec68ffffffffffffffffffffffffffffffff
+```
+
+---
+
+## 二、TCP 端口扫描结果
+
+| 端口 | 服务 | 状态 | 说明 |
+|------|------|------|------|
+| 80/tcp | HTTP | 关闭 | 无 Web 管理界面 |
+| 443/tcp | HTTPS | 关闭 | 无 HTTPS 服务 |
+| 554/tcp | RTSP | 关闭 | RTSP 功能未开启 |
+| 8080/tcp | HTTP-Alt | 关闭 | 无备用 HTTP 服务 |
+| 8443/tcp | HTTPS-Alt | 关闭 | 无备用 HTTPS 服务 |
+| 8554/tcp | RTSP-Alt | 关闭 | 无备用 RTSP 服务 |
+| 9000/tcp | Config | 关闭 | 无配置服务 |
+| 9999/tcp | Custom | 关闭 | 无自定义服务 |
+
+**结论**: 小米摄像头默认关闭所有 TCP 端口，仅开放 UDP 54321（miIO 协议）。
+
+---
+
+## 三、miIO 协议测试
+
+### 3.1 发现测试
+```python
+✓ 成功发送 miIO 发现包
+✓ 收到 32 字节响应
+✓ 设备 ID: 0x0ed8c6bc
+```
+
+### 3.2 握手测试
+```
+✗ 握手失败（需要有效的 token）
+```
+
+**说明**: miIO 协议需要 32 字节的 token 才能进行设备认证和功能调用。
+
+---
+
+## 四、视频流获取测试
+
+### 4.1 RTSP 测试
+```
+✗ RTSP 端口（554）关闭
+✗ 无法获取视频流
+```
+
+### 4.2 RTSP URL 格式（供参考）
+如果 RTSP 功能开启，可能的 URL 格式：
+- `rtsp://192.168.31.25:554/live/ch00_0` (主码流)
+- `rtsp://192.168.31.25:554/live/ch00_1` (子码流)
+- `rtsp://192.168.31.25:8554/live` (备用端口)
+
+**开启方法**:
+1. 在米家 App 中找到摄像头设备
+2. 进入设置 → 存储管理 → RTSP 流
+3. 开启 RTSP 功能
+
+---
+
+## 五、PTZ 控制测试
+
+### 5.1 测试状态
+```
+⏸️ 暂停测试（需要先获取设备 token）
+```
+
+### 5.2 计划测试项目
+- [ ] 云台上下左右转动
+- [ ] 预设位设置和调用
+- [ ] 巡航功能
+- [ ] 变倍变焦（如果支持）
+
+---
+
+## 六、关键技术发现
+
+### 6.1 协议特性
+1. **miIO 协议**:
+   - 使用 UDP 54321 端口
+   - 需要设备 token 进行认证
+   - Token 是 32 字节的十六进制字符串
+
+2. **RTSP 视频流**:
+   - 默认关闭，需要手动开启
+   - 可通过米家 App 或 miIO 命令开启
+   - 开启后可通过标准 RTSP 客户端获取视频流
+
+3. **PTZ 控制**:
+   - 需要通过 miIO 协议调用
+   - python-miio 库可能不直接支持 PTZ
+   - 可能需要使用 `genericmiot` 接口
+
+### 6.2 安全机制
+- 设备不响应未授权的 miIO 命令
+- Token 存储在小米云端，需要账号登录获取
+- RTSP 流可能需要认证
+
+---
+
+## 七、阻塞问题
+
+### 问题 1: 缺少设备 token
+**影响**: 无法执行任何 miIO 命令，无法测试 PTZ 控制  
+**优先级**: 高  
+**解决方案**: 使用 Xiaomi Cloud Tokens Extractor 工具获取
+
+### 问题 2: RTSP 功能未开启
+**影响**: 无法获取视频流  
+**优先级**: 中  
+**解决方案**: 在米家 App 中开启 RTSP 功能
+
+---
+
+## 八、下一步行动计划
+
+### 优先级 1: 获取设备 token（必须）
+```bash
+# 方法 1: 使用 Docker 工具（推荐）
+docker run --rm -it pymoroni/xiaomi-cloud-tokens-extractor
+
+# 方法 2: 使用 Python micloud 库
+pip install micloud
+python -c "from micloud import MiCloud; mc = MiCloud(); mc.login('username', 'password'); print(mc.get_devices())"
+```
+
+### 优先级 2: 开启 RTSP 功能
+```bash
+# 方法 1: 使用米家 App（推荐）
+# 进入摄像头设置 → 存储管理 → 开启 RTSP
+
+# 方法 2: 使用 miiocli（需要 token）
+miiocli chuangmicamera --ip 192.168.31.25 --token YOUR_TOKEN info
+```
+
+### 优先级 3: 测试 PTZ 控制
+```bash
+# 使用 genericmiot 接口探索 PTZ 属性
+miiocli genericmiot --ip 192.168.31.25 --token YOUR_TOKEN properties | grep -i ptz
+miiocli genericmiot --ip 192.168.31.25 --token YOUR_TOKEN actions | grep -i ptz
+
+# 尝试调用 PTZ 方法
+miiocli genericmiot --ip 192.168.31.25 --token YOUR_TOKEN call ptz_control '{"direction": "left"}'
+```
+
+### 优先级 4: 验证视频流
+```bash
+# 使用 ffplay 测试 RTSP 流
+ffplay rtsp://192.168.31.25:554/live/ch00_0
+
+# 使用 VLC 测试 RTSP 流
+vlc rtsp://192.168.31.25:554/live/ch00_0
+
+# 使用 ffmpeg 录制视频流
+ffmpeg -i rtsp://192.168.31.25:554/live/ch00_0 -c copy test.mp4
+```
+
+---
+
+## 九、测试工具清单
+
+| 工具 | 用途 | 状态 |
+|------|------|------|
+| python-miio | miIO 协议通信 | ✓ 已安装 |
+| nc (netcat) | UDP/TCP 端口测试 | ✓ 可用 |
+| nmap | 端口扫描 | ✓ 已安装 |
+| ping | ICMP 连通性测试 | ✓ 可用 |
+| arp | MAC 地址查询 | ✓ 可用 |
+| ffplay/VLC | RTSP 流播放 | ⏸️ 待测试 |
+| ffmpeg | 视频流处理 | ⏸️ 待测试 |
+
+---
+
+## 十、结论
+
+### 10.1 当前状态
+- ✓ 网络连通性正常
+- ✓ miIO 协议可达
+- ✗ 缺少设备 token，无法执行功能测试
+- ✗ RTSP 功能未开启，无法获取视频流
+
+### 10.2 下一步关键任务
+1. **获取设备 token**（最高优先级）
+2. 开启 RTSP 功能
+3. 测试 PTZ 控制
+4. 验证视频流获取
+
+### 10.3 预期结果
+获取 token 后，应该能够：
+- 查询设备完整信息（型号、固件版本等）
+- 控制云台转动（上下左右）
+- 设置和调用预设位
+- 开启 RTSP 并获取视频流
+- 控制其他摄像头功能（夜视、报警等）
+
+---
+
+**报告生成时间**: 2026-03-08 23:58  
+**测试工具**: Python, nc, nmap, ping, arp  
+**下一步**: 等待获取设备 token 后继续测试

@@ -1,0 +1,6 @@
+{
+  "mode": "BLOCKED",
+  "replanCount": 6,
+  "replanReason": null,
+  "blockedReason": "连续 REPLAN 超限：Attributor 输出无法解析 CONTROL flag，保守降级为 REPLAN"
+}

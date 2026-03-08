@@ -1,0 +1,39 @@
+[1] com.xiaomi-miio/docs/obtain_token.md at master - GitHub
+    URL: github.com/shaarkys/com.xiaomi-miio/blob/master/docs/obtain_token.md
+    Method 2 - Obtain device token for miio devices that hide their token after setup Use one of these methods to obtain the device token for devices that hide their tokens after setup in the Mi Home App (like the Mi Robot Vacuum Cleaner with firmware 3.3.9_003077 or higher). This is usually the case for most Mi Home devices.
+
+[2] miio.extract_tokens — python-miio documentation
+    URL: python-miio.readthedocs.io/en/latest/_modules/miio/extract_tokens.html
+    import json import logging import sqlite3 import tempfile from pprint import pformat as pf from typing import Iterator import attr import click import defusedxml.ElementTree as ET from cryptography.hazmat.backends import default_backend from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes logging.basicConfig(level=logging.INFO) _LOGGER = logging.getLogger(__name__)
+
+[3] How to Get Mi Home Devices Token - blog.matterxiaomi.com
+    URL: blog.matterxiaomi.com/blog/How-Get-Mi-Home-Devices-Token/
+    How to Get Mi Home Devices Token If you using Mi Home App of Xiaomi , no matter what to discuss here.But if you want to control your Smart devices via Home Assistant and control all devices on local network (for avoid leaking information), you need to get password key hidden by provider.
+
+[4] 【Home Assistant】获取米家设备 token_小米token获取不到-CSDN博客
+    URL: blog.csdn.net/ZJXCSDN_/article/details/115309762
+    本文介绍了两种方法来获取小米智能设备（如 Xiaomi MiIO）的访问令牌。方法1涉及使用从home-assistant.io获取的指南，通过下载并运行GitHub上的软件Xiaomi-cloud- tokens -extractor和Get_MiHome_devices_token，输入米家账号和密码获取令牌。方法2是通过安装修改过的米家应用程序来实现。
+
+[5] Xiaomi miio device token extraction simplified - Configuration - Home ...
+    URL: community.home-assistant.io/t/xiaomi-miio-device-token-extraction-simplified/368535
+    this morning i stumbled across this little Gem, and i was up and running with a xiaomi device token extraction, once i installed the windows version, in around 2-3 minutes
+
+[6] Xiaomi Tokens - Alex&#x27;s Home Assistant documentation
+    URL: alex3305.github.io/home-assistant-docs/home-assistant/xiaomi-tokens/
+    Applicable devices This is applicable to all Xiaomi Home devices that connect over wifi. In my personal situation I retrieved the tokens of my: Xiaomi Roborock S5 Max Xiaomi Fan 1C Xiaomi Fan 2S Retrieving your token (s) Currently it is impossible to retrieve this token officially, but there is a workaround available.
+
+[7] 小米 token (token在哪里获取)-腾讯云开发者社区-腾讯云
+    URL: cloud.tencent.com/developer/article/2062161
+    介绍小米设备token获取方法，包括miIO - discovery、app直接获取、DB获取，还讲解开源智能家居平台HomeAssistant的安装部署及将小米设备配置其中，实现多设备联动。
+
+[8] 【IoT】获取米家设备 token-西维蜀黍的博客 | 西维蜀黍 Blog
+    URL: swsmile.info/post/iot-extract-mi-device-token/
+    Tokens full of 0 s or f s (as above) are either already paired with the mobile app or will not yield a token through this method . In those cases the procedure shown in Tokens from Mi Home logs has to be used.
+
+[9] Easily retrieve Xiaomi and Roborock vacuum token & add to Home ...
+    URL: www.youtube.com/watch?v=m11qbkgOz5o
+    With great work from community, adding Roborock or Xiaomi robot vacuums to Home Assistant is easy and fast. And this includes retrieving tokens for robot vac...
+
+[10] 2024 取得小米設備的Token教學，分享多種不同獲取方法
+    URL: www.techmarks.com/get-mijia-token/
+    2024 取得小米設備的 Token 教學，分享多種不同獲取方法 米家的設備要使用在Homebridge上，就一定要拿到小米機器Token，才能加入Homebridge，下方分享了幾種方式，可以找自己最方便的方式獲取米家Smart Home Device的Token!

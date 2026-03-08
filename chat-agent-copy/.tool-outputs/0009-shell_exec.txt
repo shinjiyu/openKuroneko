@@ -1,0 +1,20 @@
+user             65676   1.1  0.4 445959616  65088   ??  SN   11:27PM   0:01.67 /Users/user/.local/share/fnm/node-versions/v24.11.1/installation/bin/node --require /Users/user/Documents/openKuroneko/node_modules/tsx/dist/preflight.cjs --import file:///Users/user/Documents/openKuroneko/node_modules/tsx/dist/loader.mjs /Users/user/Documents/openKuroneko/src/cli/index.ts --dir /Users/user/Documents/openKuroneko/chat-agent --loop fast
+user             63304   0.4  0.3 445950464  57120   ??  SN   11:25PM   0:03.24 /Users/user/.local/share/fnm/node-versions/v24.11.1/installation/bin/node --require /Users/user/Documents/openKuroneko/node_modules/tsx/dist/preflight.cjs --import file:///Users/user/Documents/openKuroneko/node_modules/tsx/dist/loader.mjs /Users/user/Documents/openKuroneko/src/cli/outer-brain.ts --dir /Users/user/Documents/openKuroneko/ob-agent --inner-dir /Users/user/Documents/openKuroneko/chat-agent --inner-cmd tsx /Users/user/Documents/openKuroneko/src/cli/index.ts --dir /Users/user/Documents/openKuroneko/chat-agent --loop fast --agent-name Kuroneko --escalation-wait-ms 1800000 --fast-model glm-5 --webchat-port 8091
+user              1433   0.1  0.5 1883837024  88400   ??  S    Fri04PM  10:32.10 Cursor Helper (Plugin): extension-host (agent-exec) openKuroneko [5-18]                      
+user              1416   0.1  0.8 1867042400 138560   ??  S    Fri04PM   9:55.13 Cursor Helper (Plugin): extension-host (agent-exec) creatures [3-12]                      
+_rmd             23807   0.0  0.0 426916688   1648   ??  S    10:45PM   0:00.05 /usr/sbin/cfprefsd agent
+_applepay        23806   0.0  0.0 426916688   1648   ??  S    10:45PM   0:00.05 /usr/sbin/cfprefsd agent
+_nsurlsessiond   23805   0.0  0.0 426916688   1600   ??  S    10:45PM   0:00.06 /usr/sbin/cfprefsd agent
+_accessoryupdater 23586   0.0  0.0 426916688   1568   ??  S    10:45PM   0:00.06 /usr/sbin/cfprefsd agent
+_softwareupdate  23585   0.0  0.0 426916688   1600   ??  S    10:45PM   0:00.06 /usr/sbin/cfprefsd agent
+user             18641   0.0  0.1 426957936  12720   ??  S    10:39PM   0:00.18 /usr/libexec/findmylocateagent
+user             13647   0.0  0.0 426913024   2112   ??  S    10:37PM   0:00.03 /System/Library/CoreServices/ReportCrash agent
+user             13149   0.0  0.1 426971376  18592   ??  S    10:36PM   0:00.55 /usr/libexec/knowledge-agent
+user              7925   0.0  0.0 426950480   3616   ??  S    10:33PM   0:00.05 /System/Library/CoreServices/iconservicesagent
+_locationd        5822   0.0  0.0 426949312   2976   ??  S    10:32PM   0:00.12 /usr/libexec/containermanagerd --runmode=agent --user-container-mode=current --bundle-container-mode=proxy --system-container-mode=none
+_cmiodalassistants  5809   0.0  0.0 426949312   2976   ??  S    10:32PM   0:00.07 /usr/libexec/containermanagerd --runmode=agent --user-container-mode=current --bundle-container-mode=proxy --system-container-mode=none
+_locationd        5808   0.0  0.0 426952736   5248   ??  S    10:32PM   0:00.17 /usr/libexec/trustd --agent
+_locationd        5765   0.0  0.0 426916688   1776   ??  S    10:32PM   0:00.07 /usr/sbin/cfprefsd agent
+_cmiodalassistants  5762   0.0  0.0 426952736   5248   ??  S    10:32PM   0:00.14 /usr/libexec/trustd --agent
+_cmiodalassistants  5751   0.0  0.0 426916688   1808   ??  S    10:32PM   0:00.06 /usr/sbin/cfprefsd agent
+user              5442   0.0  0.1 426982368  13792   ??  S    10:32PM   0:00.17 /System/Library/CoreServices/talagentd
