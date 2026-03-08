@@ -23,7 +23,7 @@
  *   注意：其他群的历史通过 search_thread 工具查询，不注入上下文
  */
 
-import type { LLMAdapter, Message } from '../adapter/index.js';
+import type { LLMAdapter, Message, ContentBlock } from '../adapter/index.js';
 import type { InboundMessage, InnerBrainStatus } from '../channels/types.js';
 import type { ChannelRegistry } from '../channels/registry.js';
 import type { ThreadStore } from '../threads/store.js';
@@ -282,12 +282,22 @@ function buildMessages(
     }
   }
 
-  // 当前消息
-  const mention = msg.is_mention ? '（@了你）' : '';
-  messages.push({
-    role: 'user',
-    content: `[${msg.user_id}${mention}] ${msg.content}`,
-  });
+  // 当前消息（支持多模态：图片附件转为 image_url content block）
+  const mention  = msg.is_mention ? '（@了你）' : '';
+  const textPart = `[${msg.user_id}${mention}] ${msg.content}`;
+  const imageAtts = (msg.attachments ?? []).filter(
+    (a) => a.type === 'image' && a.url && (a.url.startsWith('data:') || a.url.startsWith('http')),
+  );
+
+  if (imageAtts.length > 0) {
+    const blocks: ContentBlock[] = [{ type: 'text', text: textPart }];
+    for (const img of imageAtts) {
+      blocks.push({ type: 'image_url', image_url: { url: img.url!, detail: 'auto' } });
+    }
+    messages.push({ role: 'user', content: blocks });
+  } else {
+    messages.push({ role: 'user', content: textPart });
+  }
 
   return messages;
 }

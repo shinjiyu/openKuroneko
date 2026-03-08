@@ -1,8 +1,9 @@
 /**
  * 文件型 I/O 端点实现
  *
- * Input：读取文件内容后 truncate（消费语义）。
- * Output：写入文件（覆盖语义）。
+ * Input：基于 offset 增量读取（消费语义），offset 持久化到旁路文件。
+ * Output：追加写入（append 语义）。外脑 push-loop 基于 offset 增量读取，
+ *         若覆写文件会导致 offset 错位、截断 JSON，因此改为追加。
  */
 
 import fs from 'node:fs';
@@ -48,7 +49,8 @@ export function createFileOutputEndpoint(id: string, filePath: string): OutputEn
   return {
     id,
     async write(content: string): Promise<void> {
-      fs.writeFileSync(filePath, content, 'utf8');
+      // 追加写入：外脑 push-loop 用 offset 增量读取，覆写会导致 offset 错位截断内容
+      fs.appendFileSync(filePath, content + '\n', 'utf8');
     },
   };
 }

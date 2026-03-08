@@ -1,158 +1,156 @@
 /**
- * 飞书 Bot 频道适配器（Stub）
+ * 飞书 Bot 频道适配器
  *
- * 接口完整预留，实现 ChannelAdapter 协议。
- * 接入时需配置：
- *   FEISHU_APP_ID       飞书应用 App ID
- *   FEISHU_APP_SECRET   飞书应用 App Secret
- *   FEISHU_VERIFY_TOKEN 事件验证 Token
- *   FEISHU_ENCRYPT_KEY  消息加密 Key（可选）
- *   FEISHU_WEBHOOK_PORT 本地 Webhook 监听端口（默认 8090）
+ * ── 两种接入模式 ─────────────────────────────────────────────────────────────
  *
- * 飞书 Bot 事件订阅模式（推荐）：
- *   1. 在飞书开放平台创建应用，启用"机器人"能力
- *   2. 配置事件订阅，回调地址指向本服务 /feishu/event
- *   3. 订阅事件：im.message.receive_v1（消息）
- *   4. 订阅事件：im.chat.member.bot.added_v1（入群）
+ * 【模式 A：HTTP Webhook（需要公网 URL）】
+ *   - 飞书开放平台 → 事件订阅 → 选择"将事件发送至开发者服务器"
+ *   - 填写回调 URL：http://<公网IP>:8090/feishu/event
+ *   - 本地开发需配合 ngrok：`ngrok http 8090`，填 HTTPS 地址
+ *   - 飞书每次发送事件后等你响应，超时 3s 会重推
  *
- * 参考文档：https://open.feishu.cn/document/home/develop-a-bot-in-5-minutes/create-an-app
+ * 【模式 B：WebSocket 长连接（推荐，无需公网）】
+ *   - 飞书开放平台 → 事件订阅 → 选择"使用长连接接收事件"
+ *   - 代码主动连接飞书服务器，无需公网 IP / 域名 / HTTPS / ngrok
+ *   - 配置项：mode: 'websocket'（或设置环境变量 FEISHU_MODE=websocket）
+ *   - 限制：仅企业自建应用支持；集群部署时只有一个实例收到消息
  *
- * thread_id 格式：
+ * ── 消息类型支持 ──────────────────────────────────────────────────────────────
+ *
+ * 接收：
+ *   text        纯文本（含 @mention 解析）
+ *   image       图片（提取 image_key，附件方式透传）
+ *   audio       语音（提取 file_key）
+ *   file        文件（提取 file_key）
+ *   post        富文本（提取纯文本内容）
+ *   sticker     表情包（忽略）
+ *
+ * 发送：
+ *   文本：send({ thread_id, content })
+ *   图片：send({ thread_id, content, attachments: [{ type:'image', url }] })
+ *   文件：send({ thread_id, content, attachments: [{ type:'file', url }] })
+ *
+ * ── 配置参数 ─────────────────────────────────────────────────────────────────
+ *
+ *   appId          飞书应用 App ID
+ *   appSecret      飞书应用 App Secret
+ *   verifyToken    HTTP 模式的事件验证 Token
+ *   encryptKey     HTTP 模式的消息加密 Key（可选）
+ *   mode           'webhook'（默认）| 'websocket'
+ *   webhookPort    HTTP 模式监听端口（默认 8090）
+ *   agentOpenId    Bot 自身的飞书 open_id（用于过滤自身消息、识别 @mention）
+ *   resolveUserFn  open_id → 内部 user_id 的映射函数
+ *
+ * ── thread_id 格式 ───────────────────────────────────────────────────────────
+ *
  *   私信：feishu:dm:<open_id>
  *   群聊：feishu:group:<chat_id>
  */
 
-import type { ChannelAdapter, InboundMessage, OutboundMessage } from '../types.js';
+import type { ChannelAdapter, InboundMessage, OutboundMessage, MessageAttachment } from '../types.js';
 
 export interface FeishuAdapterOptions {
-  appId: string;
-  appSecret: string;
-  verifyToken: string;
-  encryptKey?: string | undefined;
-  webhookPort?: number | undefined;
-
-  /**
-   * 解析平台 open_id → 统一 user_id 的函数。
-   * 由外部 UserStore 提供，此处注入以避免循环依赖。
-   */
+  appId:         string;
+  appSecret:     string;
+  verifyToken?:  string;
+  encryptKey?:   string | undefined;
+  /** 'webhook'（HTTP 回调，需公网）| 'websocket'（长连接，推荐） */
+  mode?:         'webhook' | 'websocket';
+  webhookPort?:  number | undefined;
+  agentOpenId?:  string | undefined;
   resolveUserFn: (rawUserId: string, channelId: string) => string | null;
-
-  /** agent 自身的飞书 open_id，用于过滤自身消息和识别 @mention */
-  agentOpenId?: string | undefined;
 }
 
-// 飞书事件消息体（简化，仅列出本实现需要的字段）
+// ── 飞书事件消息体 ────────────────────────────────────────────────────────────
+
 interface FeishuEventBody {
   header: { event_id: string; event_type: string; create_time: string };
   event: {
     message: {
-      message_id: string;
-      chat_id: string;
-      chat_type: string; // "p2p" | "group"
-      content: string;   // JSON string
-      create_time: string;
-      parent_id?: string;
-      mentions?: Array<{ id: { open_id: string }; key: string }>;
+      message_id:   string;
+      chat_id:      string;
+      chat_type:    string;   // "p2p" | "group"
+      message_type: string;   // "text" | "image" | "audio" | "file" | "post" | "sticker"
+      content:      string;   // JSON string，结构随 message_type 变化
+      create_time:  string;
+      parent_id?:   string;
+      mentions?:    Array<{ id: { open_id: string }; key: string; name: string }>;
     };
     sender: { sender_id: { open_id: string }; sender_type: string };
   };
 }
 
+// ── 适配器 ────────────────────────────────────────────────────────────────────
+
 export class FeishuChannelAdapter implements ChannelAdapter {
   readonly channel_id = 'feishu';
-  readonly name = '飞书 Bot';
+  readonly name       = '飞书 Bot';
 
   private readonly opts: FeishuAdapterOptions;
-  private server: import('node:http').Server | null = null;
+  private server:            import('node:http').Server | null = null;
   private tenantAccessToken: string | null = null;
-  private tokenExpireAt = 0;
+  private tokenExpireAt      = 0;
 
   constructor(opts: FeishuAdapterOptions) {
-    this.opts = opts;
+    this.opts = { mode: 'webhook', ...opts };
   }
 
   async start(onMessage: (msg: InboundMessage) => Promise<void>): Promise<void> {
-    // 动态 import http，仅在使用时加载
-    const http = await import('node:http');
-    const port = this.opts.webhookPort ?? 8090;
-
-    this.server = http.createServer(async (req, res) => {
-      if (req.method !== 'POST') {
-        res.writeHead(405);
-        res.end();
-        return;
-      }
-
-      const body = await readBody(req);
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(body);
-      } catch {
-        res.writeHead(400);
-        res.end('invalid json');
-        return;
-      }
-
-      // 飞书挑战验证（首次配置时）
-      if ((parsed as Record<string, unknown>)['type'] === 'url_verification') {
-        const challenge = (parsed as Record<string, unknown>)['challenge'];
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ challenge }));
-        return;
-      }
-
-      // 解析并路由消息
-      try {
-        const msg = this.parseEvent(parsed as FeishuEventBody);
-        if (msg) {
-          await onMessage(msg);
-        }
-      } catch (e) {
-        // 解析失败不影响 HTTP 响应
-        console.error('[feishu-adapter] parse error:', e);
-      }
-
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end('{}');
-    });
-
-    this.server.listen(port, () => {
-      console.info(`[feishu-adapter] listening on :${port}`);
-    });
+    if (this.opts.mode === 'websocket') {
+      await this.startWebSocket(onMessage);
+    } else {
+      await this.startWebhook(onMessage);
+    }
   }
+
+  // ── 发送消息 ─────────────────────────────────────────────────────────────
 
   async send(msg: OutboundMessage): Promise<void> {
     const token = await this.getToken();
 
-    // 从 thread_id 提取飞书 chat_id 或 open_id
-    // feishu:dm:<open_id>    → 私信，receive_id_type = open_id
-    // feishu:group:<chat_id> → 群聊，receive_id_type = chat_id
-    const parts = msg.thread_id.split(':');
-    const type   = parts[1]; // "dm" | "group"
-    const peerId = parts.slice(2).join(':');
+    const parts       = msg.thread_id.split(':');
+    const type        = parts[1];                        // "dm" | "group"
+    const peerId      = parts.slice(2).join(':');
     const receiveIdType = type === 'group' ? 'chat_id' : 'open_id';
 
-    const body = JSON.stringify({
-      receive_id: peerId,
-      msg_type: 'text',
-      content: JSON.stringify({ text: msg.content }),
-    });
+    // 附件优先（图片、文件）
+    const attachment = msg.attachments?.[0];
+    let body: string;
+
+    if (attachment?.type === 'image' && attachment.url) {
+      // 先上传图片获取 image_key
+      const imageKey = await this.uploadImage(attachment.url, token);
+      body = JSON.stringify({
+        receive_id: peerId,
+        msg_type:   'image',
+        content:    JSON.stringify({ image_key: imageKey }),
+      });
+    } else if (attachment?.type === 'file' && attachment.url) {
+      const fileKey = await this.uploadFile(attachment.url, attachment.name ?? 'file', token);
+      body = JSON.stringify({
+        receive_id: peerId,
+        msg_type:   'file',
+        content:    JSON.stringify({ file_key: fileKey }),
+      });
+    } else {
+      body = JSON.stringify({
+        receive_id: peerId,
+        msg_type:   'text',
+        content:    JSON.stringify({ text: msg.content }),
+      });
+    }
 
     const res = await fetch(
       `https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=${receiveIdType}`,
       {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body,
-        signal: AbortSignal.timeout(15_000),
+        signal:  AbortSignal.timeout(15_000),
       },
     );
-
     if (!res.ok) {
-      throw new Error(`[feishu-adapter] send failed: ${res.status} ${await res.text()}`);
+      throw new Error(`[feishu] send failed: ${res.status} ${await res.text()}`);
     }
   }
 
@@ -162,47 +160,132 @@ export class FeishuChannelAdapter implements ChannelAdapter {
 
   async stop(): Promise<void> {
     await new Promise<void>((resolve) => {
-      if (this.server) {
-        this.server.close(() => resolve());
-      } else {
-        resolve();
-      }
+      if (this.server) this.server.close(() => resolve());
+      else resolve();
     });
   }
 
-  // ── 私有：事件解析 ────────────────────────────────────────────────────────
+  // ── 模式 A：HTTP Webhook ─────────────────────────────────────────────────
 
-  private parseEvent(body: FeishuEventBody): InboundMessage | null {
-    if (!body?.event?.message) return null;
+  private async startWebhook(onMessage: (msg: InboundMessage) => Promise<void>): Promise<void> {
+    const http = await import('node:http');
+    const port = this.opts.webhookPort ?? 8090;
 
-    const { message, sender } = body.event;
+    this.server = http.createServer(async (req, res) => {
+      if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
 
-    // 过滤 bot 自身发出的消息
-    if (
-      this.opts.agentOpenId &&
-      sender.sender_id.open_id === this.opts.agentOpenId
-    ) {
-      return null;
-    }
+      let body = await readBody(req);
+
+      // 消息加密解密
+      if (this.opts.encryptKey) {
+        try {
+          body = await decryptFeishuBody(body, this.opts.encryptKey);
+        } catch {
+          res.writeHead(400); res.end('decrypt failed'); return;
+        }
+      }
+
+      let parsed: unknown;
+      try { parsed = JSON.parse(body); }
+      catch { res.writeHead(400); res.end('invalid json'); return; }
+
+      // URL 验证挑战
+      if ((parsed as Record<string, unknown>)['type'] === 'url_verification') {
+        const challenge = (parsed as Record<string, unknown>)['challenge'];
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ challenge }));
+        return;
+      }
+
+      // 消息去重（飞书超时重推）
+      const eventId = (parsed as { header?: { event_id?: string } })?.header?.event_id;
+      if (eventId && this.seenEventIds.has(eventId)) {
+        res.writeHead(200); res.end('{}'); return;
+      }
+      if (eventId) {
+        this.seenEventIds.add(eventId);
+        setTimeout(() => this.seenEventIds.delete(eventId), 60_000);
+      }
+
+      try {
+        const msg = await this.parseEvent(parsed as FeishuEventBody);
+        if (msg) await onMessage(msg);
+      } catch { /* 解析失败不影响响应 */ }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{}');
+    });
+
+    this.server.listen(port, () => {
+      console.info(`[feishu] HTTP webhook listening on :${port}/feishu/event`);
+    });
+  }
+
+  // ── 模式 B：WebSocket 长连接 ─────────────────────────────────────────────
+
+  private async startWebSocket(onMessage: (msg: InboundMessage) => Promise<void>): Promise<void> {
+    const { Client, WSClient, EventDispatcher, LoggerLevel } = await import('@larksuiteoapi/node-sdk');
+
+    const client = new Client({
+      appId:     this.opts.appId,
+      appSecret: this.opts.appSecret,
+      loggerLevel: LoggerLevel.info,
+    });
+
+    const dispatcher = new EventDispatcher({}).register({
+      'im.message.receive_v1': async (data: unknown) => {
+        // SDK 已经解包好了事件，data 是 event body
+        const body = { header: {}, event: data } as unknown as FeishuEventBody;
+        try {
+          const msg = await this.parseEvent(body);
+          if (msg) await onMessage(msg);
+        } catch { /* 解析失败静默 */ }
+      },
+    });
+
+    const wsClient = new WSClient({
+      appId:     this.opts.appId,
+      appSecret: this.opts.appSecret,
+      loggerLevel: LoggerLevel.info,
+    });
+
+    // 保存 client 引用供 send() 使用
+    this._sdkClient = client;
+
+    wsClient.start({ eventDispatcher: dispatcher });
+    console.info('[feishu] WebSocket long-connection started (no public URL needed)');
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _sdkClient: any = null;
+
+  // 已处理的事件 ID（HTTP 模式去重用）
+  private readonly seenEventIds = new Set<string>();
+
+  // ── 事件解析 ─────────────────────────────────────────────────────────────
+
+  private async parseEvent(body: FeishuEventBody): Promise<InboundMessage | null> {
+    const { message, sender } = body.event ?? {};
+    if (!message) return null;
+
+    // 过滤 bot 自身
+    if (this.opts.agentOpenId && sender.sender_id.open_id === this.opts.agentOpenId) return null;
 
     const rawUserId = sender.sender_id.open_id;
-    const userId = this.opts.resolveUserFn(rawUserId, 'feishu') ?? rawUserId;
+    const userId    = this.opts.resolveUserFn(rawUserId, 'feishu') ?? rawUserId;
 
-    const isGroup = message.chat_type !== 'p2p';
+    const isGroup  = message.chat_type !== 'p2p';
     const threadId = isGroup
       ? `feishu:group:${message.chat_id}`
       : `feishu:dm:${rawUserId}`;
 
-    // 解析文本内容
-    let content = '';
-    try {
-      const parsed = JSON.parse(message.content) as Record<string, unknown>;
-      content = (parsed['text'] as string | undefined) ?? '';
-    } catch {
-      content = message.content;
-    }
+    // 解析消息内容（按 message_type 分发）
+    const { content, attachments: rawAttachments } = parseFeishuContent(message.message_type, message.content);
 
-    // 识别 @mention
+    // 图片类附件：立刻下载并转为 base64 data URL，方便 LLM 多模态直接消费
+    const attachments = await this.resolveAttachments(rawAttachments);
+
+    // @mention 解析
     const mentions = (message.mentions ?? []).map(
       (m) => this.opts.resolveUserFn(m.id.open_id, 'feishu') ?? m.id.open_id,
     );
@@ -210,59 +293,233 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       ? (message.mentions ?? []).some((m) => m.id.open_id === this.opts.agentOpenId)
       : content.includes('@');
 
-    // 清理 @mention 标记
-    const cleanContent = content
-      .replace(/@\S+/g, '')
-      .trim();
+    const cleanContent = content.replace(/@\S+/g, '').trim();
 
     return {
-      id: message.message_id,
-      thread_id: threadId,
-      channel_id: 'feishu',
-      user_id: userId,
-      raw_user_id: rawUserId,
-      content: cleanContent,
-      is_mention: isMention,
+      id:           message.message_id,
+      thread_id:    threadId,
+      channel_id:   'feishu',
+      user_id:      userId,
+      raw_user_id:  rawUserId,
+      content:      cleanContent,
+      is_mention:   isMention,
       mentions,
-      ts: Number(message.create_time),
-      reply_to: message.parent_id,
-      group_info: isGroup
-        ? { group_id: message.chat_id, group_name: message.chat_id }
-        : undefined,
+      ts:           Number(message.create_time),
+      reply_to:     message.parent_id,
+      attachments,
+      group_info:   isGroup ? { group_id: message.chat_id, group_name: message.chat_id } : undefined,
     };
   }
 
-  // ── 私有：Token 管理 ──────────────────────────────────────────────────────
+  // ── Token 管理 ───────────────────────────────────────────────────────────
 
   private async getToken(): Promise<string> {
     if (this.tenantAccessToken && Date.now() < this.tokenExpireAt) {
       return this.tenantAccessToken;
     }
-
-    const res = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        app_id: this.opts.appId,
-        app_secret: this.opts.appSecret,
-      }),
-      signal: AbortSignal.timeout(10_000),
-    });
-
+    const res  = await fetch(
+      'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ app_id: this.opts.appId, app_secret: this.opts.appSecret }),
+        signal:  AbortSignal.timeout(10_000),
+      },
+    );
     const data = (await res.json()) as { tenant_access_token: string; expire: number };
     this.tenantAccessToken = data.tenant_access_token;
-    this.tokenExpireAt = Date.now() + data.expire * 1000 - 60_000; // 提前 60s 刷新
+    this.tokenExpireAt     = Date.now() + data.expire * 1000 - 60_000;
     return this.tenantAccessToken;
+  }
+
+  // ── 附件解析：feishu-image:// → data URL ─────────────────────────────────
+
+  /**
+   * 将 parseFeishuContent 返回的 `feishu-image://` / `feishu-file://` 附件
+   * 转换为可直接被 LLM 消费的 data URL（图片）或本地可读路径（文件）。
+   *
+   * 仅处理图片类型；文件/音频保留原始 URL，由下游按需处理。
+   */
+  private async resolveAttachments(attachments: MessageAttachment[]): Promise<MessageAttachment[]> {
+    const results: MessageAttachment[] = [];
+    for (const att of attachments) {
+      if (att.type === 'image' && att.url?.startsWith('feishu-image://')) {
+        const imageKey = att.url.slice('feishu-image://'.length);
+        try {
+          const token  = await this.getToken();
+          const res    = await fetch(
+            `https://open.feishu.cn/open-apis/im/v1/images/${imageKey}?type=message`,
+            { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) },
+          );
+          if (res.ok) {
+            const buf    = await res.arrayBuffer();
+            const mime   = res.headers.get('content-type') ?? 'image/jpeg';
+            const b64    = Buffer.from(buf).toString('base64');
+            results.push({ ...att, url: `data:${mime};base64,${b64}` });
+          } else {
+            results.push(att); // 下载失败时保留原始引用
+          }
+        } catch {
+          results.push(att);
+        }
+      } else {
+        results.push(att);
+      }
+    }
+    return results;
+  }
+
+  // ── 图片/文件上传 ─────────────────────────────────────────────────────────
+
+  /** 读取文件内容：支持 file:// 本地路径和 HTTP(S) URL */
+  private async fetchBytes(url: string): Promise<ArrayBuffer> {
+    if (url.startsWith('file://')) {
+      const localPath = url.slice('file://'.length);
+      const buf = (await import('fs')).readFileSync(localPath);
+      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+    }
+    const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+    return res.arrayBuffer();
+  }
+
+  private async uploadImage(url: string, token: string): Promise<string> {
+    const imgData = await this.fetchBytes(url);
+    const name    = url.startsWith('file://') ? url.split('/').pop() ?? 'image.png' : 'image.png';
+
+    const form = new FormData();
+    form.append('image_type', 'message');
+    form.append('image', new Blob([imgData]), name);
+
+    const res = await fetch('https://open.feishu.cn/open-apis/im/v1/images', {
+      method:  'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body:    form,
+      signal:  AbortSignal.timeout(30_000),
+    });
+    const data = (await res.json()) as { data: { image_key: string } };
+    return data.data.image_key;
+  }
+
+  private async uploadFile(url: string, fileName: string, token: string): Promise<string> {
+    const fileData = await this.fetchBytes(url);
+
+    const form = new FormData();
+    form.append('file_type', 'stream');
+    form.append('file_name', fileName);
+    form.append('file', new Blob([fileData]), fileName);
+
+    const res = await fetch('https://open.feishu.cn/open-apis/im/v1/files', {
+      method:  'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body:    form,
+      signal:  AbortSignal.timeout(30_000),
+    });
+    const data = (await res.json()) as { data: { file_key: string } };
+    return data.data.file_key;
   }
 }
 
-// ── 工具函数 ─────────────────────────────────────────────────────────────────
+// ── 消息内容解析 ──────────────────────────────────────────────────────────────
+
+function parseFeishuContent(
+  msgType: string,
+  contentStr: string,
+): { content: string; attachments: MessageAttachment[] } {
+  const empty = { content: '', attachments: [] as MessageAttachment[] };
+
+  try {
+    const obj = JSON.parse(contentStr) as Record<string, unknown>;
+
+    switch (msgType) {
+      case 'text':
+        return { content: (obj['text'] as string | undefined) ?? '', attachments: [] };
+
+      case 'image': {
+        const imageKey = obj['image_key'] as string | undefined;
+        return {
+          content: '[图片]',
+          attachments: imageKey
+            ? [{ type: 'image', url: `feishu-image://${imageKey}`, name: imageKey }]
+            : [],
+        };
+      }
+
+      case 'audio': {
+        const fileKey = obj['file_key'] as string | undefined;
+        return {
+          content: '[语音]',
+          attachments: fileKey
+            ? [{ type: 'file', url: `feishu-file://${fileKey}`, name: fileKey }]
+            : [],
+        };
+      }
+
+      case 'file': {
+        const fileKey  = obj['file_key']  as string | undefined;
+        const fileName = obj['file_name'] as string | undefined;
+        return {
+          content: `[文件${fileName ? ': ' + fileName : ''}]`,
+          attachments: fileKey
+            ? [{ type: 'file', url: `feishu-file://${fileKey}`, name: fileName ?? fileKey }]
+            : [],
+        };
+      }
+
+      case 'post': {
+        // 富文本：提取所有 text 节点
+        const zh = (obj['zh_cn'] ?? obj['en_us'] ?? obj) as {
+          title?: string;
+          content?: unknown[][];
+        };
+        const lines: string[] = [];
+        if (zh.title) lines.push(zh.title);
+        for (const row of zh.content ?? []) {
+          const rowText = row
+            .filter((el): el is { tag: string; text?: string } => typeof el === 'object')
+            .map((el) => (el.tag === 'text' ? el.text ?? '' : el.tag === 'at' ? '@' : ''))
+            .join('');
+          if (rowText) lines.push(rowText);
+        }
+        return { content: lines.join('\n'), attachments: [] };
+      }
+
+      case 'sticker':
+        return { content: '[表情]', attachments: [] };
+
+      default:
+        return { content: contentStr, attachments: [] };
+    }
+  } catch {
+    return empty;
+  }
+}
+
+// ── 工具函数 ──────────────────────────────────────────────────────────────────
 
 function readBody(req: import('node:http').IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('end',  () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
+}
+
+/**
+ * 飞书 Encrypt Key AES-CBC-256 解密
+ * 飞书加密格式：Base64(AES256CBC(payload))，Key = SHA256(encryptKey)
+ */
+async function decryptFeishuBody(body: string, encryptKey: string): Promise<string> {
+  const crypto = await import('node:crypto');
+  const parsed = JSON.parse(body) as { encrypt?: string };
+  if (!parsed.encrypt) return body;
+
+  const keyHash  = crypto.createHash('sha256').update(encryptKey).digest();
+  const cipherBuf = Buffer.from(parsed.encrypt, 'base64');
+  const iv       = cipherBuf.subarray(0, 16);
+  const data     = cipherBuf.subarray(16);
+
+  const decipher = crypto.createDecipheriv('aes-256-cbc', keyHash, iv);
+  const decrypted = Buffer.concat([decipher.update(data), decipher.final()]);
+  return decrypted.toString('utf8');
 }

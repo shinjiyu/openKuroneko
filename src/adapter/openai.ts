@@ -116,6 +116,22 @@ export function createOpenAIAdapter(options?: {
     Authorization: `Bearer ${apiKey}`,
   };
 
+  /**
+   * OpenAI 对 tool/assistant role 的 content 要求是 string | null；
+   * 只有 user role 允许 ContentBlock[]（视觉输入）。
+   * 此处规范化：非 user role 的 array content 强制合并为纯文本。
+   */
+  function normalizeMessages(messages: Message[]): object[] {
+    return messages.map((m) => {
+      if (typeof m.content === 'string' || m.role === 'user') return m;
+      // tool / assistant role: flatten content blocks to text
+      const text = (m.content as import('./index.js').ContentBlock[])
+        .map((b) => (b.type === 'text' ? b.text : '[image]'))
+        .join('\n');
+      return { role: m.role, content: text };
+    });
+  }
+
   function buildBody(
     systemPrompt: string,
     messages: Message[],
@@ -128,7 +144,7 @@ export function createOpenAIAdapter(options?: {
       ...extraBody,
       messages: [
         { role: 'system', content: systemPrompt },
-        ...messages,
+        ...normalizeMessages(messages),
       ],
     };
     if (tools && tools.length > 0) {

@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/cli/index.js",
   "bin": {
-    "kuroneko":    "dist/cli/index.js",
+    "kuroneko": "dist/cli/index.js",
     "kuroneko-ob": "dist/cli/outer-brain.js"
   },
   "scripts": {
@@ -24,6 +24,7 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.59.0",
     "chokidar": "^4.0.0",
     "commander": "^12.0.0",
     "mem0ai": "^2.2.4",

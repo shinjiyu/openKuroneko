@@ -5,9 +5,31 @@
  * 默认实现：OpenAI Chat Completions API。
  */
 
+/** 纯文本 content block（OpenAI vision 格式） */
+export interface TextContentBlock {
+  type: 'text';
+  text: string;
+}
+
+/** 图片 content block。url 可为 data:image/...;base64,... 或 https:// 公开 URL */
+export interface ImageContentBlock {
+  type: 'image_url';
+  image_url: {
+    url:    string;
+    /** 'auto' | 'low' | 'high'，默认 auto */
+    detail?: 'auto' | 'low' | 'high';
+  };
+}
+
+export type ContentBlock = TextContentBlock | ImageContentBlock;
+
 export interface Message {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+  /**
+   * 纯文本时直接用 string（向后兼容）。
+   * 含图片等富媒体时用 ContentBlock[]（OpenAI vision 格式）。
+   */
+  content: string | ContentBlock[];
 }
 
 export interface LLMResult {

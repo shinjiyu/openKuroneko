@@ -57,6 +57,9 @@ export interface OutboundMessage {
 
   /** 回复特定消息 ID（可选） */
   reply_to?: string | undefined;
+
+  /** 附件（图片、文件等富媒体） */
+  attachments?: MessageAttachment[] | undefined;
 }
 
 /** 消息附件 */

@@ -1,0 +1,31 @@
+{
+  "_comment": "身份映射配置示例。复制为 ob-agent/identity-config.json 使用。",
+  "_design": [
+    "user_id 是内部抽象身份，跨渠道稳定。",
+    "同一用户可绑定多个 channel（feishu / dingtalk / webchat / cli）。",
+    "priority 越小越优先被选为 BLOCK 通知渠道（响应越快的自动学习上升）。",
+    "未在此处配置的 Feishu/DingTalk 用户，首次消息时自动注册为 '<channelId>_<rawId>'。",
+    "事后可通过 identity-config.json 合并，或调用 UserStore.linkChannel() 绑定到真实身份。"
+  ],
+  "users": [
+    {
+      "userId": "bob",
+      "displayName": "Bob",
+      "role": "member",
+      "channels": [
+        { "channelId": "webchat",  "rawId": "bob",              "priority": 1 },
+        { "channelId": "feishu",   "rawId": "ou_xxxxxxxxxxxx",  "priority": 2 },
+        { "channelId": "dingtalk", "rawId": "user_yyyyyyyyyyy", "priority": 3 }
+      ]
+    },
+    {
+      "userId": "alice",
+      "displayName": "Alice",
+      "role": "member",
+      "channels": [
+        { "channelId": "feishu",   "rawId": "ou_aaaaaaaaaaaa",  "priority": 1 },
+        { "channelId": "webchat",  "rawId": "alice",            "priority": 2 }
+      ]
+    }
+  ]
+}

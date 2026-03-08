@@ -37,14 +37,15 @@ AGENT_NAME="${AGENT_NAME:-Kuroneko}"
 FEISHU="${FEISHU:-}"                      # 留空则不开启飞书频道
 FEISHU_APP_ID="${FEISHU_APP_ID:-}"
 FEISHU_APP_SECRET="${FEISHU_APP_SECRET:-}"
-FEISHU_VERIFY_TOKEN="${FEISHU_VERIFY_TOKEN:-}"
-FEISHU_ENCRYPT_KEY="${FEISHU_ENCRYPT_KEY:-}"
-FEISHU_PORT="${FEISHU_PORT:-8090}"
+FEISHU_MODE="${FEISHU_MODE:-websocket}"   # websocket（推荐，无需公网）| webhook（需公网 URL）
+FEISHU_VERIFY_TOKEN="${FEISHU_VERIFY_TOKEN:-}"   # webhook 模式必填
+FEISHU_ENCRYPT_KEY="${FEISHU_ENCRYPT_KEY:-}"     # webhook 模式可选
+FEISHU_PORT="${FEISHU_PORT:-8090}"               # webhook 模式端口
 FEISHU_AGENT_OPEN_ID="${FEISHU_AGENT_OPEN_ID:-}"
 
 # ── 快速模型配置（群聊参与决策用，无 thinking，降低分类延迟）──────────────────
-# 与主力模型相同但关闭 thinking，兼顾精度与速度
-FAST_MODEL="${FAST_MODEL:-glm-5}"
+# 推荐填入无 thinking 的 flash 级模型；留空则回退到主对话模型（慢）
+FAST_MODEL="${FAST_MODEL:-glm-4-flash}"
 
 # ── BLOCK 升级配置 ────────────────────────────────────────────────────────────
 ESCALATION_WAIT_MS="${ESCALATION_WAIT_MS:-1800000}"   # 默认 30min
@@ -72,13 +73,17 @@ fi
 
 if [ -n "${FEISHU}" ] && [ -n "${FEISHU_APP_ID}" ]; then
   OB_ARGS+=(
-    --feishu-app-id       "${FEISHU_APP_ID}"
-    --feishu-app-secret   "${FEISHU_APP_SECRET}"
-    --feishu-verify-token "${FEISHU_VERIFY_TOKEN}"
-    --feishu-port         "${FEISHU_PORT}"
+    --feishu-app-id     "${FEISHU_APP_ID}"
+    --feishu-app-secret "${FEISHU_APP_SECRET}"
+    --feishu-mode       "${FEISHU_MODE}"
   )
-  [ -n "${FEISHU_ENCRYPT_KEY}"    ] && OB_ARGS+=(--feishu-encrypt-key    "${FEISHU_ENCRYPT_KEY}")
-  [ -n "${FEISHU_AGENT_OPEN_ID}"  ] && OB_ARGS+=(--feishu-agent-open-id  "${FEISHU_AGENT_OPEN_ID}")
+  # webhook 模式额外参数
+  if [ "${FEISHU_MODE}" = "webhook" ]; then
+    [ -n "${FEISHU_VERIFY_TOKEN}" ] && OB_ARGS+=(--feishu-verify-token "${FEISHU_VERIFY_TOKEN}")
+    [ -n "${FEISHU_ENCRYPT_KEY}"  ] && OB_ARGS+=(--feishu-encrypt-key  "${FEISHU_ENCRYPT_KEY}")
+    OB_ARGS+=(--feishu-port "${FEISHU_PORT}")
+  fi
+  [ -n "${FEISHU_AGENT_OPEN_ID}" ] && OB_ARGS+=(--feishu-agent-open-id "${FEISHU_AGENT_OPEN_ID}")
 fi
 
 # ── 启动前提示 ────────────────────────────────────────────────────────────────

@@ -39,6 +39,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ChannelAdapter, InboundMessage, OutboundMessage } from '../types.js';
+import type { InnerBrainPool } from '../../outer-brain/inner-brain-pool.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -73,20 +74,15 @@ export interface WebchatAdapterOptions {
   /** CORS 允许来源，默认 "*" */
   corsOrigin?: string | undefined;
   /**
-   * 内脑状态文件路径（<innerTempDir>/status）。
-   * 提供后 /webchat/inner-status 接口可返回实时状态。
+   * 内脑进程池（多实例支持）。
+   * 提供后 /webchat/inner-brain/list 和 /webchat/inner-brain/logs 接口会列出所有实例。
+   */
+  pool?: InnerBrainPool | undefined;
+  /**
+   * 内脑状态文件路径（兼容旧单实例，不推荐）。
+   * @deprecated 请改用 pool
    */
   innerStatusFile?: string | undefined;
-  /**
-   * 内脑临时目录（<innerTempDir>）。
-   * 提供后可访问完整状态列表及日志（/webchat/inner-brain/list、/webchat/inner-brain/logs）。
-   */
-  innerTempDir?: string | undefined;
-  /**
-   * 内脑工作目录（如 chat-agent/）。
-   * 提供后可读取 .brain/milestones.md 并在监控面板显示里程碑列表。
-   */
-  agentDir?: string | undefined;
 }
 
 // ── SSE 客户端 ───────────────────────────────────────────────────────────────
@@ -262,12 +258,13 @@ export class WebchatChannelAdapter implements ChannelAdapter {
       return;
     }
 
-    // GET /webchat/inner-brain/logs?lines=N → 内脑最近日志行
+    // GET /webchat/inner-brain/logs?lines=N&instanceId=xxx → 内脑最近日志行
     if (url.pathname === '/webchat/inner-brain/logs' && req.method === 'GET') {
       const user = this.authenticate(req, res, url);
       if (!user) return;
-      const lines = Math.min(500, Math.max(1, parseInt(url.searchParams.get('lines') ?? '150', 10)));
-      this.serveInnerBrainLogs(res, lines);
+      const lines      = Math.min(500, Math.max(1, parseInt(url.searchParams.get('lines') ?? '150', 10)));
+      const instanceId = url.searchParams.get('instanceId') ?? undefined;
+      this.serveInnerBrainLogs(res, lines, instanceId);
       return;
     }
 
@@ -322,7 +319,25 @@ export class WebchatChannelAdapter implements ChannelAdapter {
   // ── GET /webchat/inner-status ─────────────────────────────────────────────
 
   private serveInnerStatus(res: ServerResponse): void {
-    const sf = this.opts.innerStatusFile ?? (this.opts.innerTempDir ? path.join(this.opts.innerTempDir, 'status') : undefined);
+    const pool = this.opts.pool;
+    if (pool) {
+      const running = pool.runningInstances();
+      if (running.length && running[0]) {
+        const sf = path.join(running[0].tempDir, 'status');
+        if (fs.existsSync(sf)) {
+          try {
+            const status = JSON.parse(fs.readFileSync(sf, 'utf8')) as Record<string, unknown>;
+            json(res, 200, status);
+            return;
+          } catch { /* fall through */ }
+        }
+      }
+      json(res, 200, { mode: 'IDLE', blocked: false, block_reason: null });
+      return;
+    }
+
+    // 兼容旧单实例
+    const sf = this.opts.innerStatusFile;
     if (!sf || !fs.existsSync(sf)) {
       json(res, 200, { mode: 'unknown', blocked: false, block_reason: null });
       return;
@@ -336,32 +351,42 @@ export class WebchatChannelAdapter implements ChannelAdapter {
   }
 
   private serveInnerBrainList(res: ServerResponse): void {
-    const dir = this.opts.innerTempDir;
-    if (!dir) {
+    const pool = this.opts.pool;
+    if (!pool) {
       json(res, 200, { instances: [] });
       return;
     }
-    const statusFile = path.join(dir, 'status');
-    let status: Record<string, unknown> = { mode: 'unknown', blocked: false };
-    if (fs.existsSync(statusFile)) {
-      try { status = JSON.parse(fs.readFileSync(statusFile, 'utf8')) as Record<string, unknown>; } catch { /* ignore */ }
-    }
-    const id = path.basename(dir);
-    const logDir = path.join(dir, 'logs');
-    const hasLogs = fs.existsSync(logDir) && fs.readdirSync(logDir).some(f => f.endsWith('.jsonl'));
 
-    // 读取里程碑列表（从内脑工作目录的 .brain/milestones.md）
-    const milestones = this.parseMilestones(dir);
+    const instances = pool.list().map((r) => {
+      let status: Record<string, unknown> = { mode: 'unknown', blocked: false };
+      const sf = path.join(r.tempDir, 'status');
+      if (fs.existsSync(sf)) {
+        try { status = JSON.parse(fs.readFileSync(sf, 'utf8')) as Record<string, unknown>; } catch { /* ignore */ }
+      }
 
-    json(res, 200, { instances: [{ id, status, hasLogs, milestones }] });
+      const logDir  = path.join(r.tempDir, 'logs');
+      const hasLogs = fs.existsSync(logDir) && fs.readdirSync(logDir).some(f => f.endsWith('.jsonl'));
+      const milestones = this.parseMilestones(r.workDir);
+
+      return {
+        id:         r.id,
+        poolStatus: r.status,
+        originUser: r.originUser,
+        goal:       r.goal.slice(0, 80) + (r.goal.length > 80 ? '…' : ''),
+        startedAt:  r.startedAt.toISOString(),
+        exitedAt:   r.exitedAt?.toISOString() ?? null,
+        status,
+        hasLogs,
+        milestones,
+      };
+    });
+
+    json(res, 200, { instances });
   }
 
-  /** 解析 .brain/milestones.md，返回结构化里程碑列表 */
-  private parseMilestones(innerTempDir: string): Array<{ id: string; status: string; title: string; desc: string }> {
-    // 从 status 文件反推 agentDir（innerTempDir 是临时目录，agentDir 通过配置传入）
-    const agentDir = this.opts.agentDir;
-    if (!agentDir) return [];
-    const msFile = path.join(agentDir, '.brain', 'milestones.md');
+  /** 解析 <workDir>/.brain/milestones.md，返回结构化里程碑列表 */
+  private parseMilestones(workDir: string): Array<{ id: string; status: string; title: string; desc: string }> {
+    const msFile = path.join(workDir, '.brain', 'milestones.md');
     if (!fs.existsSync(msFile)) return [];
     try {
       const content = fs.readFileSync(msFile, 'utf8');
@@ -377,14 +402,27 @@ export class WebchatChannelAdapter implements ChannelAdapter {
     }
   }
 
-  private serveInnerBrainLogs(res: ServerResponse, lines: number): void {
-    const dir = this.opts.innerTempDir;
-    if (!dir) { json(res, 200, { logs: [] }); return; }
+  private serveInnerBrainLogs(res: ServerResponse, lines: number, instanceId?: string): void {
+    const pool = this.opts.pool;
+    if (!pool) { json(res, 200, { logs: [] }); return; }
 
-    const logDir = path.join(dir, 'logs');
+    // 确定目标实例的 tempDir
+    let tempDir: string | undefined;
+    if (instanceId) {
+      const record = pool.get(instanceId);
+      if (!record) { json(res, 404, { error: `实例 ${instanceId} 不存在` }); return; }
+      tempDir = record.tempDir;
+    } else {
+      // 默认取最新启动的实例
+      const all = pool.list();
+      tempDir = all.length ? all[0]!.tempDir : undefined;
+    }
+
+    if (!tempDir) { json(res, 200, { logs: [] }); return; }
+
+    const logDir = path.join(tempDir, 'logs');
     if (!fs.existsSync(logDir)) { json(res, 200, { logs: [] }); return; }
 
-    // 取最新的日志文件（按文件名降序）
     const files = fs.readdirSync(logDir).filter(f => f.endsWith('.jsonl')).sort().reverse();
     if (!files.length || !files[0]) { json(res, 200, { logs: [] }); return; }
 
@@ -397,7 +435,7 @@ export class WebchatChannelAdapter implements ChannelAdapter {
     const parsed = last.map(l => {
       try { return JSON.parse(l) as Record<string, unknown>; } catch { return { raw: l } as Record<string, unknown>; }
     });
-    json(res, 200, { logs: parsed });
+    json(res, 200, { logs: parsed, instanceId: instanceId ?? pool.list()[0]?.id });
   }
 
   // ── POST /webchat/message ──────────────────────────────────────────────────

@@ -223,6 +223,14 @@ export async function runAttributor(
   // Parse CONTROL flag and REASON from the end of content
   const parsed = parseControlFlag(lastContent);
 
+  if (parsed.flag === 'REPLAN' && parsed.reason.includes('无法解析')) {
+    // 记录实际输出末尾（方便排查 LLM 输出格式问题）
+    logger.warn('attributor', {
+      event: 'control.parse_fail',
+      data: { contentLen: lastContent.length, tail: lastContent.slice(-300) },
+    });
+  }
+
   logger.info('attributor', {
     event: 'attribute.done',
     data: { flag: parsed.flag, reason: parsed.reason },
@@ -231,17 +239,44 @@ export async function runAttributor(
   return { ...parsed, rawContent: lastContent };
 }
 
-/** 从文本末尾提取 CONTROL 和 REASON，失败时默认 REPLAN */
+/**
+ * 从文本中提取 CONTROL flag 和 REASON，失败时默认 REPLAN。
+ *
+ * 兼容 LLM 常见的输出变体：
+ *   - 中文全角冒号 "CONTROL：CONTINUE"
+ *   - Markdown 加粗 "**CONTROL**: CONTINUE"
+ *   - 反引号包裹 "`CONTINUE`"
+ *   - 大小写混用（已有 /i flag）
+ *   - 前后多余空白
+ */
 export function parseControlFlag(content: string): { flag: ControlFlag; reason: string } {
-  const controlMatch = content.match(/CONTROL:\s*(CONTINUE|SUCCESS_AND_NEXT|REPLAN|BLOCK)/i);
-  const reasonMatch  = content.match(/REASON:\s*(.+)/i);
+  // 清洗：去掉 markdown 加粗/斜体/反引号包裹，统一全角冒号为半角
+  const cleaned = content
+    .replace(/\*{1,2}(CONTROL|REASON)\*{1,2}/gi, '$1') // **CONTROL** → CONTROL
+    .replace(/[：]/g, ':')                               // 全角冒号 → 半角
+    .replace(/`([^`]+)`/g, '$1');                        // `CONTINUE` → CONTINUE
 
-  if (!controlMatch || !controlMatch[1]) {
+  const VALID_FLAGS = ['CONTINUE', 'SUCCESS_AND_NEXT', 'REPLAN', 'BLOCK'] as const;
+  const flagPattern = VALID_FLAGS.join('|');
+
+  const controlMatch = cleaned.match(new RegExp(`CONTROL\\s*:\\s*(${flagPattern})`, 'i'));
+  const reasonMatch  = cleaned.match(/REASON\s*:\s*(.+)/i);
+
+  if (!controlMatch?.[1]) {
+    // 最后一次尝试：扫描末尾 500 字符，找独立出现的 flag 关键词
+    const tail     = cleaned.slice(-500).toUpperCase();
+    const fallback = VALID_FLAGS.find((f) => tail.includes(f));
+    if (fallback) {
+      return {
+        flag:   fallback,
+        reason: (reasonMatch?.[1] ?? '').trim() || '（从末尾关键词推断）',
+      };
+    }
     return { flag: 'REPLAN', reason: 'Attributor 输出无法解析 CONTROL flag，保守降级为 REPLAN' };
   }
 
   return {
     flag:   controlMatch[1].toUpperCase() as ControlFlag,
-    reason: (reasonMatch && reasonMatch[1]) ? reasonMatch[1].trim() : '（无原因说明）',
+    reason: (reasonMatch?.[1] ?? '').trim() || '（无原因说明）',
   };
 }

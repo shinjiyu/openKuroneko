@@ -67,7 +67,16 @@ export class CliChannelAdapter implements ChannelAdapter {
   }
 
   async send(msg: OutboundMessage): Promise<void> {
-    const line = `[外脑] ${msg.content}\n`;
+    let line = `[外脑] ${msg.content}\n`;
+    if (msg.attachments && msg.attachments.length > 0) {
+      const attachLines = msg.attachments
+        .map((a) => {
+          const loc = a.url?.startsWith('file://') ? a.url.slice('file://'.length) : (a.url ?? '');
+          return `  📎 [${a.type}] ${a.name ?? loc}${loc && loc !== a.name ? `\n     路径: ${loc}` : ''}`;
+        })
+        .join('\n');
+      line += `[附件]\n${attachLines}\n`;
+    }
     fs.appendFileSync(this.outputPath, line, 'utf8');
   }
 

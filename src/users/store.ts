@@ -2,10 +2,29 @@
  * User Store — 用户身份注册与频道优先级动态学习
  *
  * 职责：
- * 1. 注册用户，绑定跨频道账号
+ * 1. 注册用户，绑定跨频道账号（一个 user_id ↔ 多个 channel binding）
  * 2. resolveUser(rawId, channelId) → user_id
- * 3. 记录 BLOCK 通知响应时间，动态调整 channel priority
- * 4. 持久化到 <obDir>/users.json
+ * 3. 动态接入新渠道用户（autoRegister）
+ * 4. 记录 BLOCK 通知响应时间，动态调整 channel priority
+ * 5. 持久化到 <obDir>/users.json
+ *
+ * 身份映射设计：
+ *   - 内部 user_id 是抽象身份（如 "bob"），跨渠道稳定
+ *   - 每个用户可绑定多个 channel（feishu / dingtalk / webchat / cli）
+ *   - 未知用户首次接入时自动注册为 "<channelId>_<rawId>"，管理员可事后 link
+ *
+ * 声明式预配置（ob-agent/identity-config.json）：
+ *   {
+ *     "users": [
+ *       { "userId": "bob", "displayName": "Bob", "role": "member",
+ *         "channels": [
+ *           { "channelId": "feishu",   "rawId": "ou_xxxxxxxxxxxx" },
+ *           { "channelId": "dingtalk", "rawId": "user_yyy" },
+ *           { "channelId": "webchat",  "rawId": "bob" }
+ *         ]
+ *       }
+ *     ]
+ *   }
  *
  * priority 越小 = 越优先通知。初始值由注册顺序决定。
  */
@@ -13,6 +32,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { User, UserChannelBinding, UserRole } from '../channels/types.js';
+
+/** identity-config.json 的结构 */
+interface IdentityConfig {
+  users: Array<{
+    userId: string;
+    displayName?: string;
+    role?: UserRole;
+    channels: Array<{ channelId: string; rawId: string; priority?: number }>;
+  }>;
+}
 
 export class UserStore {
   private readonly filePath: string;
@@ -23,6 +52,11 @@ export class UserStore {
   constructor(obDir: string) {
     this.filePath = path.join(obDir, 'users.json');
     this.load();
+    // 自动加载声明式身份配置（如果存在）
+    const identityConfigPath = path.join(obDir, 'identity-config.json');
+    if (fs.existsSync(identityConfigPath)) {
+      this.loadIdentityConfig(identityConfigPath);
+    }
   }
 
   // ── 查找 ─────────────────────────────────────────────────────────────────
@@ -107,6 +141,42 @@ export class UserStore {
       user.last_seen_at = Date.now();
       this.save();
     }
+  }
+
+  /**
+   * 将一个 channel 的原始 ID 绑定到已存在的内部用户。
+   * 用于管理员将动态注册的匿名用户（如 feishu_ou_xxx）关联到真实身份（如 bob）。
+   *
+   * 场景：
+   *   1. Feishu 用户首次消息 → 自动注册为 "feishu_ou_abc"
+   *   2. 管理员调用 linkChannel("bob", "feishu", "ou_abc")
+   *   3. 后续 feishu:ou_abc 的消息都解析为 user_id="bob"
+   *   4. 旧的 "feishu_ou_abc" 临时账号可选择性清理
+   */
+  linkChannel(userId: string, channelId: string, rawId: string): void {
+    if (!this.users.has(userId)) {
+      throw new Error(`UserStore: user "${userId}" not found, register first`);
+    }
+    this.register({ userId, displayName: userId, channels: [{ channelId, rawId }] });
+  }
+
+  /**
+   * 从声明式配置文件加载身份映射。
+   * 会覆盖同 userId 的现有 channel 配置（幂等）。
+   * 文件格式见模块头部注释（identity-config.json）。
+   */
+  loadIdentityConfig(configPath: string): void {
+    try {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as IdentityConfig;
+      for (const u of config.users ?? []) {
+        this.register({
+          userId:      u.userId,
+          displayName: u.displayName ?? u.userId,
+          ...(u.role !== undefined ? { role: u.role } : {}),
+          channels:    u.channels,
+        });
+      }
+    } catch { /* 配置格式错误时跳过，不影响启动 */ }
   }
 
   // ── BLOCK 响应学习 ────────────────────────────────────────────────────────

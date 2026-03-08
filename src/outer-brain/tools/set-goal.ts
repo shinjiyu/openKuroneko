@@ -1,27 +1,22 @@
 /**
- * set_goal — 为内脑设置新目标，并在需要时自动启动内脑进程
+ * set_goal — 为内脑设置新目标，每次调用启动一个独立实例
  *
- * 写入内脑的 input 文件（覆盖语义），触发内脑 archiveForNewTask + 新 goal。
- * 如果 InnerBrainManager 已提供且内脑当前未运行，自动 launch。
+ * 每次调用都创建新的内脑实例（独立工作目录 + 独立临时目录），
+ * 真正实现并行任务执行，同时避免跨任务工作目录污染。
  */
 
-import fs from 'node:fs';
 import type { ObTool } from './types.js';
-import type { InnerBrainManager } from '../inner-brain-manager.js';
+import type { InnerBrainPool } from '../inner-brain-pool.js';
 
 export function createSetGoalTool(
-  innerTempDir: string,
-  innerBrainMgr?: InnerBrainManager | undefined,
-  onGoalSet?: (goal: string, originUser: string) => void,
+  pool: InnerBrainPool,
+  onGoalSet?: (goal: string, originUser: string, instanceId: string) => void,
 ): ObTool {
-  const inputFile  = `${innerTempDir}/input`;
-  const statusFile = `${innerTempDir}/status`;
-
   return {
     name: 'set_goal',
     description:
-      '为内脑设置新目标。内脑会归档当前任务，从干净状态开始执行新目标。' +
-      '如果内脑未运行，会自动启动。请确认用户明确要求开始新任务后再调用此工具。',
+      '为内脑启动新任务实例。每次调用都会创建独立的内脑进程（独立工作目录），支持多任务并行。' +
+      '请确认用户明确要求开始新任务后再调用。返回 instance_id，可用于后续操作（停止/发送指令）。',
     parameters: {
       goal: {
         type: 'string',
@@ -40,44 +35,18 @@ export function createSetGoalTool(
 
       if (!goal) return { ok: false, output: 'goal 不能为空' };
 
-      const message = `[NEW_GOAL]\norigin_user: ${originUser}\n\n${goal}`;
-
-      // 按需启动内脑（必须在 append 之前决定，避免 offset 竞争）
-      const offsetFile = `${inputFile}.offset`;
-      let launchNote = '';
-      if (innerBrainMgr) {
-        if (!innerBrainMgr.isRunning()) {
-          // 内脑未运行：将 offset 对齐到当前文件末尾，再追加新目标。
-          // 这样新启动的内脑实例只读到本次的 [NEW_GOAL]，不会重读历史内容。
-          const currentSize = fs.existsSync(inputFile) ? fs.statSync(inputFile).size : 0;
-          fs.writeFileSync(offsetFile, String(currentSize), 'utf8');
-          fs.appendFileSync(inputFile, '\n' + message + '\n', 'utf8');
-          innerBrainMgr.launch();
-          launchNote = ' 内脑进程已自动启动。';
-        } else {
-          // 内脑已在运行：追加到文件末尾，内脑自行以当前 offset 读取
-          fs.appendFileSync(inputFile, '\n' + message + '\n', 'utf8');
-          launchNote = ' 内脑已在运行，新目标已写入队列。';
-        }
-      } else {
-        // 无 InnerBrainManager：直接追加
-        fs.appendFileSync(inputFile, '\n' + message + '\n', 'utf8');
+      let instanceId: string;
+      try {
+        instanceId = pool.launch(goal, originUser);
+      } catch (err) {
+        return { ok: false, output: String(err instanceof Error ? err.message : err) };
       }
 
-      // 更新 status 中的 goal_origin_user（快速读取用）
-      try {
-        const existing = fs.existsSync(statusFile)
-          ? (JSON.parse(fs.readFileSync(statusFile, 'utf8')) as Record<string, unknown>)
-          : {};
-        existing['goal_origin_user'] = originUser;
-        fs.writeFileSync(statusFile, JSON.stringify(existing, null, 2), 'utf8');
-      } catch { /* 非关键 */ }
-
-      onGoalSet?.(goal, originUser);
+      onGoalSet?.(goal, originUser, instanceId);
 
       return {
         ok: true,
-        output: `新目标已发送给内脑，来源用户：${originUser}。${launchNote}`.trim(),
+        output: `新内脑实例已启动，instance_id=${instanceId}，来源用户：${originUser}。可用 list_inner_brains 查看所有实例状态。`,
       };
     },
   };

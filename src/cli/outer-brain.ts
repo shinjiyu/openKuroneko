@@ -10,19 +10,16 @@
  *               [--feishu-port <port>]
  *               [--escalation-wait-ms <ms>]
  *
- * 独立进程：内脑（kuroneko --dir ...）和外脑分别运行。
- * 外脑通过 <innerTempDir>/input、directives、output、status 文件与内脑通信。
+ * 多实例内脑：
+ *   每次 set_goal 都会在 <obDir>/tasks/<instanceId>/ 创建独立工作目录并启动新内脑进程。
+ *   内脑命令通过 --inner-cmd 指定（其中 --dir 参数会被池自动替换为实例目录）。
  *
  * 示例：
- *   # 仅 CLI 模式（调试用）
+ *   # 仅 CLI 模式
  *   kuroneko-ob --dir ./ob-agent --inner-dir ./chat-agent
  *
  *   # 同时开启 WebChat（端口 8091）
  *   kuroneko-ob --dir ./ob-agent --inner-dir ./chat-agent --webchat-port 8091
- *
- *   # 同时接入飞书
- *   kuroneko-ob --dir ./ob-agent --inner-dir ./chat-agent \
- *     --feishu-app-id cli_xxx --feishu-app-secret xxx --feishu-verify-token xxx
  */
 
 import { Command } from 'commander';
@@ -30,11 +27,11 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 
-import { resolveIdentity, acquirePathLock, releasePathLock } from '../identity/index.js';
-import { loadConfig } from '../config/index.js';
 import { createLogger } from '../logger/index.js';
 import { createOpenAIAdapter } from '../adapter/index.js';
-import { createOuterBrain, InnerBrainManager } from '../outer-brain/index.js';
+import { createOuterBrain, InnerBrainPool } from '../outer-brain/index.js';
+import { resolveIdentity } from '../identity/index.js';
+import { loadConfig } from '../config/index.js';
 import { CliChannelAdapter } from '../channels/adapters/cli.js';
 import { FeishuChannelAdapter } from '../channels/adapters/feishu.js';
 import { WebchatChannelAdapter } from '../channels/adapters/webchat.js';
@@ -47,29 +44,34 @@ program
   .name('kuroneko-ob')
   .description('openKuroneko 外脑（Outer Brain）— 多频道人类交互层')
   .requiredOption('--dir <path>', '外脑工作目录（存储 threads/、users.json、soul.md）')
-  .requiredOption('--inner-dir <path>', '内脑 agent 目录（同 kuroneko --dir 的值）')
+  .requiredOption('--inner-dir <path>', '内脑 agent 目录（作为内脑启动命令模板中 --dir 的默认值）')
   .option('--soul <path>', 'soul.md 路径（默认 <dir>/soul.md）')
   .option('--webchat-port <port>', '开启 WebChat 频道，监听指定端口（如 8091）')
   .option('--webchat-cors <origin>', 'WebChat CORS 允许来源（默认 "*"）')
   .option('--agent-name <name>', 'Agent 在群聊中被 @ 的名字（默认 "Kuroneko"）')
   .option('--feishu-app-id <id>', '飞书 App ID')
   .option('--feishu-app-secret <secret>', '飞书 App Secret')
-  .option('--feishu-verify-token <token>', '飞书事件验证 Token')
-  .option('--feishu-encrypt-key <key>', '飞书消息加密 Key（可选）')
-  .option('--feishu-port <port>', '飞书 Webhook 监听端口（默认 8090）')
+  .option('--feishu-verify-token <token>', '飞书 HTTP Webhook 事件验证 Token')
+  .option('--feishu-encrypt-key <key>', '飞书 HTTP Webhook 消息加密 Key（可选）')
+  .option('--feishu-mode <mode>', '飞书接入模式：webhook（需公网，默认）| websocket（长连接，推荐）')
+  .option('--feishu-port <port>', '飞书 Webhook 监听端口（默认 8090，仅 webhook 模式）')
   .option('--feishu-agent-open-id <id>', '外脑的飞书 open_id（用于过滤自身消息）')
   .option('--escalation-wait-ms <ms>', 'BLOCK 升级等待时间（ms，默认 1800000=30min）')
   .option(
     '--inner-cmd <cmd>',
-    '内脑启动命令（set_goal 时自动拉起）。\n' +
+    '内脑启动命令模板（set_goal 时自动拉起新实例）。\n' +
+    '池会自动将其中的 --dir 参数替换为每个实例的独立工作目录。\n' +
     '例："node dist/cli/index.js --dir ./chat-agent --loop fast"\n' +
-    '不填则内脑需手动启动。',
+    '不填则内脑需手动启动（不支持多实例）。',
+  )
+  .option(
+    '--max-concurrent <n>',
+    '最大并发内脑实例数（默认 4）',
   )
   .option(
     '--fast-model <model>',
     '用于群聊参与决策（SPEAK/SILENT 分类）的快速模型名称。\n' +
-    '建议使用无 thinking 的 flash 级模型，如 glm-4-flash。\n' +
-    '不填则使用与主对话相同的模型（慢但无需额外配置）。',
+    '建议使用无 thinking 的 flash 级模型，如 glm-4-flash。',
   )
   .option('--no-cli', '禁用 CLI 频道（默认启用）')
   .parse(process.argv);
@@ -85,28 +87,25 @@ const opts = program.opts<{
   feishuAppSecret?:     string;
   feishuVerifyToken?:   string;
   feishuEncryptKey?:    string;
+  feishuMode?:          string;
   feishuPort?:          string;
   feishuAgentOpenId?:   string;
   escalationWaitMs?:    string;
   innerCmd?:            string;
+  maxConcurrent?:       string;
   fastModel?:           string;
   cli:                  boolean;
-}>(); 
+}>();
 
 // ── Bootstrap ──────────────────────────────────────────────────────────────────
 
 async function main() {
-  const obDir      = path.resolve(opts.dir);
-  const innerDir   = path.resolve(opts.innerDir);
+  const obDir    = path.resolve(opts.dir);
+  const innerDir = path.resolve(opts.innerDir);
 
   fs.mkdirSync(obDir, { recursive: true });
 
-  // 外脑身份（复用 identity 模块，但不加路径锁）
   const obAgentId = `ob-${path.basename(obDir)}`;
-
-  // 内脑 tempDir 推断（与 kuroneko 保持一致）
-  const innerIdentity = resolveIdentity(innerDir);
-  const innerTempDir  = innerIdentity.tempDir;
 
   // 日志（外脑独立日志目录）
   const obTempDir = path.join(os.tmpdir(), 'kuroneko', obAgentId);
@@ -115,24 +114,52 @@ async function main() {
 
   logger.info('cli', {
     event: 'ob.start',
-    data: { obDir, innerDir, innerTempDir },
+    data: { obDir, innerDir },
   });
 
-  // 配置（内脑 config 共享，复用 LLM 配置）
-  const config   = loadConfig(innerTempDir);
-  const llm      = createOpenAIAdapter(config.model ? { model: config.model } : {});
+  // 配置（从 innerDir 派生的 tempDir 读取 agent.config.json）
+  const innerIdentity = resolveIdentity(innerDir);
+  const innerTempDir  = innerIdentity.tempDir;
+  const config = loadConfig(innerTempDir);
+  const llm    = createOpenAIAdapter(config.model ? { model: config.model } : {});
 
-  // 快速模型：用于群聊参与决策（SPEAK/SILENT），无需 thinking，显著降低延迟
+  // 快速模型
   const fastModelName = opts.fastModel ?? process.env['FAST_MODEL'];
   const fastLlm = fastModelName
     ? createOpenAIAdapter({
         model:     fastModelName,
-        extraBody: { enable_thinking: false },  // ZhipuAI GLM flash 系列支持
+        extraBody: { enable_thinking: false },
       })
     : undefined;
 
   if (fastLlm) {
     logger.info('cli', { event: 'fast-model.ready', data: { model: fastModelName } });
+  }
+
+  // ── 内脑进程池 ───────────────────────────────────────────────────────────
+
+  let innerBrainPool: InnerBrainPool | undefined;
+  if (opts.innerCmd) {
+    const launchCommandTemplate = opts.innerCmd.trim().split(/\s+/);
+    const maxConcurrent = opts.maxConcurrent ? parseInt(opts.maxConcurrent, 10) : 4;
+
+    innerBrainPool = new InnerBrainPool({
+      obDir,
+      launchCommandTemplate,
+      maxConcurrent,
+      logger,
+      onInstanceExit: (inst) => {
+        logger.info('cli', {
+          event: 'inner-brain.exit',
+          data: { id: inst.id, code: inst.exitCode, signal: inst.exitSignal },
+        });
+      },
+    });
+
+    logger.info('cli', {
+      event: 'inner-brain-pool.ready',
+      data: { cmd: opts.innerCmd, maxConcurrent },
+    });
   }
 
   // ── 频道适配器 ───────────────────────────────────────────────────────────
@@ -141,6 +168,7 @@ async function main() {
 
   // CLI 频道（默认开启）
   if (opts.cli !== false) {
+    // CLI 频道使用 innerDir 对应的 tempDir（调试用，单实例）
     const inputPath  = path.join(innerTempDir, 'input');
     const outputPath = path.join(innerTempDir, 'output');
     adapters.push(new CliChannelAdapter({
@@ -159,81 +187,68 @@ async function main() {
       usersConfigPath:  fs.existsSync(webchatUsersPath) ? webchatUsersPath : undefined,
       agentName:        opts.agentName,
       corsOrigin:       opts.webchatCors,
-      innerStatusFile:  path.join(innerTempDir, 'status'),
-      innerTempDir:     innerTempDir,
-      agentDir:         innerDir,
+      pool:             innerBrainPool,
     }));
     logger.info('cli', {
       event: 'channel.registered',
       data: {
-        channel:    'webchat',
-        port:       opts.webchatPort,
-        auth:       fs.existsSync(webchatUsersPath) ? 'token' : 'anonymous',
+        channel:  'webchat',
+        port:     opts.webchatPort,
+        auth:     fs.existsSync(webchatUsersPath) ? 'token' : 'anonymous',
       },
     });
   }
 
   // 飞书频道
+  // resolveUserFn 使用 lazy closure：ob 创建后注入 userStore，实现渠道→内部身份映射。
+  // 已知用户（users.json / identity-config.json 中预配置）直接命中；
+  // 未知用户自动注册为 "feishu_<open_id>"，管理员可事后调用 linkChannel 关联到真实身份。
+  let _feishuUserStore: import('../users/store.js').UserStore | null = null;
+
   if (opts.feishuAppId && opts.feishuAppSecret && opts.feishuVerifyToken) {
     adapters.push(new FeishuChannelAdapter({
       appId:        opts.feishuAppId,
       appSecret:    opts.feishuAppSecret,
       verifyToken:  opts.feishuVerifyToken,
       encryptKey:   opts.feishuEncryptKey,
+      mode:         (opts.feishuMode as 'webhook' | 'websocket' | undefined) ?? 'webhook',
       webhookPort:  opts.feishuPort ? parseInt(opts.feishuPort, 10) : 8090,
       agentOpenId:  opts.feishuAgentOpenId,
-      // resolveUser 在 outer brain 创建后由 userStore 提供，先用 identity 函数
-      resolveUserFn: (rawId, _channelId) => rawId,
+      resolveUserFn: (rawId, channelId) => {
+        if (_feishuUserStore) {
+          // 先查已有映射；未找到则自动注册（autoRegister=true）
+          return _feishuUserStore.resolveUser(rawId, channelId, true) ?? rawId;
+        }
+        return rawId; // 启动瞬间的降级（不丢消息）
+      },
     }));
     logger.info('cli', { event: 'channel.registered', data: { channel: 'feishu' } });
-  }
-
-  // ── 内脑进程管理器（可选） ────────────────────────────────────────────────
-
-  let innerBrainMgr: InnerBrainManager | undefined;
-  if (opts.innerCmd) {
-    // 解析命令字符串为数组（简单按空格分割，带引号的路径请用 shell 转义）
-    const launchCommand = opts.innerCmd.trim().split(/\s+/);
-    innerBrainMgr = new InnerBrainManager({
-      obDir,
-      innerDir,
-      launchCommand,
-      logger,
-      onExit: (code, signal) => {
-        logger.info('cli', {
-          event: 'inner-brain.exit',
-          data: { code, signal },
-        });
-      },
-    });
-    logger.info('cli', {
-      event: 'inner-brain-mgr.ready',
-      data: { cmd: opts.innerCmd },
-    });
   }
 
   // ── 创建外脑 ──────────────────────────────────────────────────────────────
 
   const ob = createOuterBrain({
     obDir,
-    innerTempDir,
     llm,
     logger,
     extraAdapters: adapters,
     ...(opts.soul ? { soulPath: opts.soul } : {}),
     ...(opts.escalationWaitMs ? { escalationWaitMs: parseInt(opts.escalationWaitMs, 10) } : {}),
-    ...(innerBrainMgr ? { innerBrainMgr } : {}),
+    ...(innerBrainPool ? { innerBrainPool } : {}),
     ...(fastLlm ? { fastLlm } : {}),
   });
+
+  // 将 userStore 注入 Feishu resolver（创建后立即注入，start() 之前完成）
+  _feishuUserStore = ob.userStore;
 
   // ── 信号处理 ──────────────────────────────────────────────────────────────
 
   const cleanup = async () => {
     logger.info('cli', { event: 'ob.shutdown', data: {} });
     await ob.stop();
-    if (innerBrainMgr?.isRunning()) {
-      logger.info('cli', { event: 'inner-brain.stopping', data: {} });
-      await innerBrainMgr.stop();
+    if (innerBrainPool?.isAnyRunning()) {
+      logger.info('cli', { event: 'inner-brain.stopping-all', data: {} });
+      await innerBrainPool.stopAll();
     }
     process.exit(0);
   };
@@ -250,7 +265,6 @@ async function main() {
     data: { channels: adapters.map((a) => a.channel_id) },
   });
 
-  // 保持进程活跃
   process.stdin.resume();
 }
 

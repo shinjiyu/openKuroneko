@@ -494,6 +494,7 @@
       <button id="ib-back-btn" onclick="closeIbMonitor()">← 返回对话</button>
     </div>
     <div id="ib-status-card">
+      <div id="ib-inst-meta" style="display:none;margin-bottom:6px"></div>
       <div id="ib-mode-row">
         <span id="ib-mode-badge" class="ib-badge">—</span>
         <span id="ib-milestone-text">内脑未启动</span>
@@ -531,7 +532,8 @@ let ROOMS       = [];
 let currentRoom = null;   // null = DM, string = room_id
 let es          = null;   // EventSource
 let unread      = {};     // room_id → count
-let ibLastLogTs = '';     // 最后一条日志的 ts，用于去重判断
+let ibLastLogTs        = '';   // 最后一条日志的 ts，用于去重判断
+let ibCurrentInstanceId = null; // 当前查看的实例 ID
 
 // 每个 thread 独立的消息列表
 // key: threadId（"dm" 或 room_id），value: HTML string
@@ -924,36 +926,40 @@ function startStatusPoll() {
 }
 
 // ── 内脑侧边栏导航 ────────────────────────────────────────────────────────────
+let _ibInstances = []; // 缓存实例列表，供导航更新
+
 async function initIbNav() {
   try {
     const res = await fetch('/webchat/inner-brain/list', { headers: { Authorization: 'Bearer ' + TOKEN } });
     if (!res.ok) return;
     const data = await res.json();
-    const instances = data.instances || [];
+    _ibInstances = data.instances || [];
     const list = $('ib-nav-list');
     list.innerHTML = '';
 
-    if (instances.length === 0) {
-      // 仍然显示一个占位项（内脑未启动）
-      instances.push({ id: '-', status: { mode: 'unknown', blocked: false }, hasLogs: false });
+    if (_ibInstances.length === 0) {
+      _ibInstances = [{ id: '-', poolStatus: 'IDLE', status: { mode: 'unknown', blocked: false }, hasLogs: false }];
     }
 
-    instances.forEach((inst, idx) => {
+    _ibInstances.forEach((inst, idx) => {
       const navId = 'nav-ib-' + idx;
       const el = document.createElement('div');
       el.className = 'nav-item';
       el.id = navId;
-      const modeLabel = inst.status.blocked ? 'BLOCKED' : (inst.status.mode || '—');
-      const indClass  = inst.status.blocked ? 'blocked' : (inst.status.mode === 'unknown' ? 'idle' : 'running');
-      el.innerHTML = `<span class="icon">🧠</span><span class="label">内脑实例</span><span id="ib-ind-${idx}" class="ib-indicator ${indClass}">${modeLabel}</span>`;
+      const isRunning = inst.poolStatus === 'RUNNING';
+      const modeLabel = inst.status?.blocked ? 'BLOCKED' : (isRunning ? (inst.status?.mode || 'RUNNING') : '已完成');
+      const indClass  = inst.status?.blocked ? 'blocked' : (!isRunning ? 'idle' : 'running');
+      const shortId   = inst.id === '-' ? '无实例' : inst.id.replace('ib-', '').slice(-8);
+      el.innerHTML = `<span class="icon">🧠</span><span class="label" title="${escHtml(inst.id)}">${escHtml(shortId)}</span><span id="ib-ind-${idx}" class="ib-indicator ${indClass}">${modeLabel}</span>`;
       el.onclick = () => openIbMonitor(idx);
       list.appendChild(el);
     });
   } catch { /* ignore */ }
 }
 
-function updateIbNavIndicator(modeOrNull) {
-  const ind = document.getElementById('ib-ind-0');
+function updateIbNavIndicator(modeOrNull, idx) {
+  const i = idx ?? 0;
+  const ind = document.getElementById('ib-ind-' + i);
   if (!ind) return;
   if (!modeOrNull) {
     ind.className = 'ib-indicator idle'; ind.textContent = '—';
@@ -967,7 +973,11 @@ function updateIbNavIndicator(modeOrNull) {
 // ── 内脑监控面板 ──────────────────────────────────────────────────────────────
 let ibPollerTimer  = null;
 
-async function openIbMonitor(_idx) {
+async function openIbMonitor(idx) {
+  // 设置当前查看的实例 ID
+  const inst = _ibInstances[idx];
+  ibCurrentInstanceId = (inst && inst.id !== '-') ? inst.id : null;
+
   // 隐藏聊天区域，显示监控面板
   $('chat-header').style.display = 'none';
   $('inner-status-bar').style.display = 'none';
@@ -978,7 +988,7 @@ async function openIbMonitor(_idx) {
 
   // 激活导航项
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-  const navEl = document.getElementById('nav-ib-0');
+  const navEl = document.getElementById('nav-ib-' + idx);
   if (navEl) navEl.classList.add('active');
 
   ibLastLogTs = '';  // 重置去重标记，强制重新渲染
@@ -1006,19 +1016,29 @@ function closeIbMonitor() {
 }
 
 async function refreshIbData() {
-  // 状态 + 里程碑
+  // 状态 + 里程碑（找到当前实例）
   try {
     const r = await fetch('/webchat/inner-brain/list', { headers: { Authorization: 'Bearer ' + TOKEN } });
     if (r.ok) {
       const data = await r.json();
-      const inst = data.instances?.[0];
+      _ibInstances = data.instances || [];
+      // 找到当前选中的实例
+      let inst = ibCurrentInstanceId
+        ? _ibInstances.find(i => i.id === ibCurrentInstanceId)
+        : _ibInstances[0];
       renderIbStatus(inst);
       renderIbMilestones(inst?.milestones || []);
+      // 更新侧边栏导航指示器
+      _ibInstances.forEach((i, idx) => {
+        const mode = i.status?.blocked ? 'blocked' : (i.poolStatus === 'RUNNING' ? i.status?.mode : null);
+        updateIbNavIndicator(mode, idx);
+      });
     }
   } catch { /* ignore */ }
-  // 日志（取最新 500 条）
+  // 日志（取最新 500 条，传 instanceId）
   try {
-    const r = await fetch('/webchat/inner-brain/logs?lines=500', { headers: { Authorization: 'Bearer ' + TOKEN } });
+    const idParam = ibCurrentInstanceId ? `&instanceId=${encodeURIComponent(ibCurrentInstanceId)}` : '';
+    const r = await fetch(`/webchat/inner-brain/logs?lines=500${idParam}`, { headers: { Authorization: 'Bearer ' + TOKEN } });
     if (r.ok) {
       const data = await r.json();
       renderIbLogs(data.logs || []);
@@ -1034,16 +1054,30 @@ function renderIbStatus(inst) {
     $('ib-block-msg').style.display = 'none';
     return;
   }
-  const s = inst.status;
+  const s = inst.status || {};
   const badge = $('ib-mode-badge');
-  const mode  = s.mode || '—';
+  const isExited = inst.poolStatus === 'EXITED';
+  const mode  = isExited ? 'EXITED' : (s.mode || '—');
 
   badge.textContent = mode;
   badge.className = 'ib-badge' +
-    (s.blocked ? ' blocked' : (mode === 'EXECUTE' || mode === 'PLAN') ? ' running' : (mode === 'COMPLETE') ? ' complete' : '');
+    (isExited ? ' idle' : s.blocked ? ' blocked' : (mode === 'EXECUTE' || mode === 'PLAN') ? ' running' : (mode === 'COMPLETE') ? ' complete' : '');
 
   const ms = s.milestone?.title || '';
-  $('ib-milestone-text').textContent = ms || (s.blocked ? '等待解除阻塞' : mode === 'unknown' ? '内脑未启动' : '—');
+  $('ib-milestone-text').textContent = ms || (s.blocked ? '等待解除阻塞' : mode === 'unknown' ? '内脑未启动' : isExited ? '已退出' : '—');
+
+  // 显示实例元数据（目标摘要 + 派发者）
+  const metaEl = $('ib-inst-meta');
+  if (metaEl && inst.id !== '-') {
+    const startTime = inst.startedAt ? new Date(inst.startedAt).toLocaleTimeString() : '';
+    metaEl.innerHTML = `<span style="color:var(--text2);font-size:12px">` +
+      `实例 <b>${escHtml(inst.id)}</b> · 派发自 <b>${escHtml(inst.originUser || '?')}</b> · ${startTime}` +
+      (isExited ? ' · <span style="color:var(--orange)">已退出</span>' : '') +
+      `</span>`;
+    metaEl.style.display = 'block';
+  } else if (metaEl) {
+    metaEl.style.display = 'none';
+  }
 
   if (s.ts) {
     $('ib-last-ts').textContent = '更新：' + new Date(s.ts).toLocaleTimeString();
