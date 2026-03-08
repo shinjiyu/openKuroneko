@@ -386,18 +386,27 @@ export class BrainFS {
 
   // ── 里程碑解析 ───────────────────────────────────────────────────────────────
 
-  parseMilestones(): Milestone[] {
+  parseMilestones(warnOnFail?: (line: string) => void): Milestone[] {
     const content = this.readMilestones();
     const results: Milestone[] = [];
     for (const line of content.split('\n')) {
-      const m = parseMilestoneLine(line);
-      if (m) results.push(m);
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//')) continue;
+      // 只对看起来像里程碑行（以 [ 开头）但解析失败的行报警
+      if (trimmed.startsWith('[')) {
+        const m = parseMilestoneLine(trimmed);
+        if (m) {
+          results.push(m);
+        } else if (warnOnFail) {
+          warnOnFail(trimmed);
+        }
+      }
     }
     return results;
   }
 
-  getActiveMilestone(): Milestone | null {
-    return this.parseMilestones().find(m => m.status === 'Active') ?? null;
+  getActiveMilestone(warnOnFail?: (line: string) => void): Milestone | null {
+    return this.parseMilestones(warnOnFail).find(m => m.status === 'Active') ?? null;
   }
 
   markMilestoneCompleted(id: string): void {
@@ -438,12 +447,23 @@ export class BrainFS {
     // 此方法作为语义占位，Controller 调用它表明这是循环里程碑逻辑
   }
 
-  // ── goal.md 中读取 max_replan 参数 ──────────────────────────────────────────
+  // ── goal.md 中读取 max_replan / max_cycles 参数 ─────────────────────────────
 
   parseMaxReplan(): number {
     const goal = this.readGoal();
     const m = goal.match(/max_replan\s*[=:]\s*(\d+)/i);
     return m && m[1] ? parseInt(m[1], 10) : 5;
+  }
+
+  /**
+   * 从 goal.md 中读取 max_cycles 参数（循环里程碑轮次上限）。
+   * 返回 0 表示不限制（默认）。
+   * 示例：在 goal.md 末尾写 `max_cycles: 30`
+   */
+  parseMaxCycles(): number {
+    const goal = this.readGoal();
+    const m = goal.match(/max_cycles\s*[=:]\s*(\d+)/i);
+    return m && m[1] ? parseInt(m[1], 10) : 0;
   }
 
   // ── 新任务归档（清理旧任务的 brain 状态，保留 skills 知识沉淀） ───────────────

@@ -145,7 +145,13 @@ export async function runExecutor(
   let currentMessages: Message[] = [{ role: 'user', content: userMessage }];
   let lastContent = '';
 
-  for (let round = 0; ; round++) {
+  /** 单次 Executor 最多工具调用轮次，防止 LLM 持续输出工具调用导致无限循环 */
+  const MAX_EXEC_ROUNDS = 50;
+
+  for (let round = 0; round < MAX_EXEC_ROUNDS; round++) {
+    if (round === MAX_EXEC_ROUNDS - 1) {
+      logger.warn('executor', { event: 'llm.max_rounds', data: { round, milestoneId: activeMilestone.id } });
+    }
     logger.info('executor', { event: 'llm.call', data: { round } });
 
     let result;

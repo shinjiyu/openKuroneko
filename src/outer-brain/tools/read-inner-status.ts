@@ -41,7 +41,7 @@ export function createReadInnerStatusTool(pool: InnerBrainPool): ObTool {
 
       const summary = all.map((r) => {
         const status = readStatus(r.tempDir);
-        return {
+        const entry: Record<string, unknown> = {
           id:          r.id,
           status:      r.status,
           originUser:  r.originUser,
@@ -52,6 +52,12 @@ export function createReadInnerStatusTool(pool: InnerBrainPool): ObTool {
           milestone:   status?.milestone ?? null,
           blocked:     status?.blocked ?? null,
         };
+        // 循环里程碑 / 睡眠状态额外信息
+        if (status?.mode === 'SLEEPING') {
+          entry['sleeping_until'] = status['sleeping_until'] ?? null;
+          entry['cycle_count']    = status['cycle_count'] ?? 0;
+        }
+        return entry;
       });
 
       return { ok: true, output: JSON.stringify(summary, null, 2) };

@@ -49,11 +49,34 @@ export interface PushLoopOptions {
 export class PushLoop {
   private readonly opts:    PushLoopOptions;
   private timer:            ReturnType<typeof setInterval> | null = null;
-  /** 每个实例独立维护 output.ob.offset */
+  /**
+   * 每个实例独立维护 output.ob.offset。
+   * 启动时从磁盘恢复（持久化到 <tempDir>/output.ob.offset），
+   * 防止外脑重启后重复处理已有事件。
+   */
   private readonly offsets: Map<string, number> = new Map();
 
   constructor(opts: PushLoopOptions) {
     this.opts = opts;
+  }
+
+  /** 从磁盘读取持久化 offset（外脑重启时调用） */
+  private loadOffset(instanceId: string, tempDir: string): number {
+    const offsetFile = path.join(tempDir, 'output.ob.offset');
+    try {
+      const v = parseInt(fs.readFileSync(offsetFile, 'utf8'), 10);
+      return isNaN(v) ? 0 : v;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** 将 offset 持久化到磁盘 */
+  private saveOffset(instanceId: string, tempDir: string, offset: number): void {
+    try {
+      fs.writeFileSync(path.join(tempDir, 'output.ob.offset'), String(offset), 'utf8');
+    } catch { /* non-critical */ }
+    this.offsets.set(instanceId, offset);
   }
 
   start(): void {
@@ -89,21 +112,30 @@ export class PushLoop {
     const outputFile = path.join(tempDir, 'output');
     if (!fs.existsSync(outputFile)) return;
 
-    const content = this.readNewContent(instanceId, outputFile);
-    if (!content) return;
+    // 首次读取时从磁盘恢复 offset（防重启重复处理）
+    if (!this.offsets.has(instanceId)) {
+      const saved = this.loadOffset(instanceId, tempDir);
+      this.offsets.set(instanceId, saved);
+    }
 
+    const newContent = this.readNewContent(instanceId, tempDir, outputFile);
+    if (!newContent) return;
+
+    // 按行分割处理，支持同一批次多事件（防止 JSON.parse 整块失败丢失 BLOCK 事件）
     const { logger } = this.opts;
-    const parsed = parseInnerOutput(content);
+    const events = parseInnerOutputLines(newContent);
 
-    logger.info('push-loop', {
-      event: 'inner_output',
-      data: { instanceId, type: parsed.type, preview: parsed.message.slice(0, 80) },
-    });
+    for (const parsed of events) {
+      logger.info('push-loop', {
+        event: 'inner_output',
+        data: { instanceId, type: parsed.type, preview: parsed.message.slice(0, 80) },
+      });
 
-    switch (parsed.type) {
-      case 'BLOCK':    await this.handleBlock(instanceId, tempDir, parsed, originUser);           break;
-      case 'COMPLETE': await this.handleComplete(instanceId, tempDir, parsed, originUser);        break;
-      case 'PROGRESS': await this.handleProgress(parsed);                                         break;
+      switch (parsed.type) {
+        case 'BLOCK':    await this.handleBlock(instanceId, tempDir, parsed, originUser);    break;
+        case 'COMPLETE': await this.handleComplete(instanceId, tempDir, parsed, originUser); break;
+        case 'PROGRESS': await this.handleProgress(parsed);                                  break;
+      }
     }
   }
 
@@ -260,9 +292,9 @@ export class PushLoop {
     return best.thread_id;
   }
 
-  // ── offset-based 增量读取（每实例独立 offset）────────────────────────────
+  // ── offset-based 增量读取（每实例独立 offset，持久化到磁盘）─────────────
 
-  private readNewContent(instanceId: string, filePath: string): string | null {
+  private readNewContent(instanceId: string, tempDir: string, filePath: string): string | null {
     const stat   = fs.statSync(filePath);
     const offset = this.offsets.get(instanceId) ?? 0;
     if (stat.size <= offset) return null;
@@ -271,7 +303,9 @@ export class PushLoop {
     const buf = Buffer.alloc(stat.size - offset);
     fs.readSync(fd, buf, 0, buf.length, offset);
     fs.closeSync(fd);
-    this.offsets.set(instanceId, stat.size);
+
+    // 持久化新 offset，重启后不重复处理
+    this.saveOffset(instanceId, tempDir, stat.size);
 
     const content = buf.toString('utf8').trim();
     return content || null;
@@ -317,9 +351,29 @@ function inferAttachmentType(filePath: string): MessageAttachment['type'] {
   return 'file';
 }
 
-function parseInnerOutput(content: string): InnerBrainOutput {
+/**
+ * 将 output 文件的增量内容解析为事件数组。
+ *
+ * 内脑每次写 output 是 `fs.appendFileSync`，多次写入后增量内容可能包含多行
+ * JSON 事件（如 PROGRESS + BLOCK）。原 JSON.parse(content) 对整块内容会失败，
+ * 导致 BLOCK 等关键事件被静默丢弃。
+ *
+ * 修复策略：按行分割，每行独立解析，非 JSON 行走文本前缀匹配。
+ */
+function parseInnerOutputLines(content: string): InnerBrainOutput[] {
+  const lines  = content.split('\n').map((l) => l.trim()).filter(Boolean);
+  const events: InnerBrainOutput[] = [];
+
+  for (const line of lines) {
+    events.push(parseSingleLine(line));
+  }
+
+  return events.length > 0 ? events : [{ type: 'PROGRESS', message: content, ts: new Date().toISOString() }];
+}
+
+function parseSingleLine(line: string): InnerBrainOutput {
   try {
-    const obj = JSON.parse(content) as Partial<InnerBrainOutput>;
+    const obj = JSON.parse(line) as Partial<InnerBrainOutput>;
     if (obj.type && obj.message) {
       return {
         type:        obj.type,
@@ -332,13 +386,13 @@ function parseInnerOutput(content: string): InnerBrainOutput {
   } catch { /* not JSON */ }
 
   const ts = new Date().toISOString();
-  if (content.startsWith('[BLOCK]')) {
-    const reason = content.replace('[BLOCK]', '').trim();
+  if (line.startsWith('[BLOCK]')) {
+    const reason = line.replace('[BLOCK]', '').trim();
     return { type: 'BLOCK', message: reason, question: reason, ts };
   }
-  if (content.startsWith('[COMPLETE]')) {
-    return { type: 'COMPLETE', message: content.replace('[COMPLETE]', '').trim(), ts };
+  if (line.startsWith('[COMPLETE]')) {
+    return { type: 'COMPLETE', message: line.replace('[COMPLETE]', '').trim(), ts };
   }
 
-  return { type: 'PROGRESS', message: content, ts };
+  return { type: 'PROGRESS', message: line, ts };
 }

@@ -157,12 +157,16 @@ export function createController(ctx: ControllerContext, deps: ControllerDeps): 
         brain.appendConstraint(humanNote);
         logger.info('controller', { event: 'block.human.note.written', data: { preview: resolveContent.slice(0, 80) } });
 
+        // 解封后无论走哪条路径都重置 replanCount，
+        // 防止因"连续 REPLAN 超限→BLOCKED→解封→立即再 REPLAN 超限"形成死锁。
+        state.replanCount = 0;
         if (decision === 'CONTINUE') {
           state.mode = 'EXECUTE';
           state.blockedReason = null;
         } else {
           state.replanReason = `BLOCK 已解除，外脑指示：${resolveContent}`;
           state.mode = 'DECOMPOSE';
+          state.blockedReason = null;
         }
         brain.writeState(state);
         return { hadWork: true };
@@ -224,7 +228,9 @@ export function createController(ctx: ControllerContext, deps: ControllerDeps): 
           }
         }
 
-        const activeMilestone = brain.getActiveMilestone();
+        const activeMilestone = brain.getActiveMilestone((badLine) => {
+          logger.warn('controller', { event: 'milestone.parse.failed', data: { line: badLine.slice(0, 120) } });
+        });
         if (!activeMilestone) {
           // 没有 Active 里程碑，检查是否全部完成
           if (brain.allMilestonesCompleted()) {
@@ -364,11 +370,38 @@ export function createController(ctx: ControllerContext, deps: ControllerDeps): 
               break;
             }
 
+            // cyclic:0 防护：间隔为 0 会造成无限紧密循环，强制最小 1 分钟
+            const safeInterval = Math.max(milestone.cycleIntervalMs, 60_000);
+            if (safeInterval !== milestone.cycleIntervalMs) {
+              logger.warn('controller', {
+                event: 'cycle_done.interval_clamped',
+                data: { milestoneId: milestone.id, original: milestone.cycleIntervalMs, clamped: safeInterval },
+              });
+            }
+
+            // max_cycles 保护（goal.md 可声明 max_cycles: N）
+            const maxCycles  = brain.parseMaxCycles();
+            const newCycleCount = (state.cycleCount ?? 0) + 1;
+            if (maxCycles > 0 && newCycleCount > maxCycles) {
+              logger.warn('controller', {
+                event: 'cycle_done.max_cycles_exceeded',
+                data: { milestoneId: milestone.id, cycleCount: newCycleCount, maxCycles },
+              });
+              // 超出最大轮次 → 强制进入 BLOCKED，等待人工决策
+              const reason = `循环里程碑 ${milestone.id} 已执行 ${newCycleCount} 轮（max_cycles=${maxCycles}），超出上限，等待外脑决策。`;
+              await writeBlockOutput(ioRegistry, reason, brain.readGoalOriginUser(), logger);
+              state.mode         = 'BLOCKED';
+              state.blockedReason = reason;
+              state.cycleCount    = newCycleCount;
+              brain.writeState(state);
+              break;
+            }
+
             // 循环里程碑：本轮完成，进入 SLEEPING 等待下一周期
             brain.keepCyclicMilestoneActive(milestone.id);
-            state.cycleCount = (state.cycleCount ?? 0) + 1;
-            state.sleepUntil = new Date(Date.now() + milestone.cycleIntervalMs).toISOString();
-            state.mode       = 'SLEEPING';
+            state.cycleCount  = newCycleCount;
+            state.sleepUntil  = new Date(Date.now() + safeInterval).toISOString();
+            state.mode        = 'SLEEPING';
             state.replanCount = 0;
             brain.writeState(state);
 

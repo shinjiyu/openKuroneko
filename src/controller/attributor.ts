@@ -168,8 +168,14 @@ export async function runAttributor(
   let currentMessages: Message[] = [{ role: 'user', content: userMessage }];
   let lastContent = '';
 
+  /** 单次 Attributor 最多工具调用轮次（write_constraint/skill/knowledge），防止无限循环 */
+  const MAX_ATTR_ROUNDS = 20;
+
   // Attributor tool call loop (write_constraint / write_skill / write_knowledge)
-  for (let round = 0; ; round++) {
+  for (let round = 0; round < MAX_ATTR_ROUNDS; round++) {
+    if (round === MAX_ATTR_ROUNDS - 1) {
+      logger.warn('attributor', { event: 'llm.max_rounds', data: { round } });
+    }
     logger.info('attributor', { event: 'llm.call', data: { round } });
 
     let result;
