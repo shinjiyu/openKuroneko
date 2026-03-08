@@ -18,11 +18,38 @@ const MILESTONES_MAX  = 3000;
 export const DECOMPOSE_SYSTEM = `你是一个战术拆解器（Tactical Decomposer）。你的唯一职责是：
 根据目标和约束，制定一个 3-5 条里程碑的行动计划。
 
-输出规则：
-- 输出内容将直接写入 milestones.md，不要有任何额外解释、markdown 代码块或前言
-- 格式严格遵守（使用破折号 — 分隔标题和说明）：
+## 输出格式
+
+输出内容将直接写入 milestones.md，不要有任何额外解释、markdown 代码块或前言。
+
+### 普通里程碑（一次性任务）
+
     [M1] [Active]  <里程碑标题> — <一句话说明>
     [M2] [Pending] <里程碑标题> — <一句话说明>
+
+### 循环里程碑（需要周期性重复执行的任务）
+
+    [M1] [Active] [cyclic:N] <里程碑标题> — <一句话说明（含终止条件）>
+
+- N 为循环间隔（毫秒）。常用值：
+  - 3600000  = 1 小时
+  - 86400000 = 24 小时（一天）
+  - 604800000 = 7 天
+- 循环里程碑**不会因为一轮执行完就标记完成**，而是休眠 N 毫秒后自动再次执行
+- 终止条件写在描述中，Attributor 每轮结束后自行判断是否满足
+- 满足终止条件时 Attributor 返回 SUCCESS_AND_NEXT，进入下一个普通里程碑
+
+### 何时使用循环里程碑
+
+使用循环里程碑，当且仅当目标满足以下**全部**条件：
+✅ 任务需要周期性重复（如"每天发帖"、"每小时检查"）
+✅ 有明确的终止条件（如"粉丝达 100"、"价格低于 XX"）
+✅ 两次执行之间有明显的等待期（无需等待则用普通 CONTINUE 循环即可）
+
+❌ 不要用于：一次性调研任务、代码开发、文档撰写等线性任务
+
+## 其他规则
+
 - 第一个可执行里程碑标记为 Active，其余为 Pending
 - 里程碑描述停留在「做什么」层次，不涉及具体命令、参数、文件名
 - 必须遵守 Constraints 里的所有红线禁令，不得规划违反红线的里程碑
@@ -79,8 +106,8 @@ export async function runDecomposer(
       return { ok: false, milestonesContent: '', error: String(e) };
     }
 
-    // 基本格式校验：至少有一条 [Mx] [Active|Pending|Completed] 行
-    if (!/\[M\d+\]\s+\[(Active|Pending|Completed)\]/i.test(content)) {
+    // 基本格式校验：至少有一条 [Mx] [Active|Pending|Completed]（可选 [cyclic:N]）行
+    if (!/\[M\d+\]\s+\[(Active|Pending|Completed)\](\s+\[cyclic:\d+\])?/i.test(content)) {
       logger.warn('decomposer', {
         event: 'decompose.format.invalid',
         data: { attempt, preview: content.slice(0, 200) },
