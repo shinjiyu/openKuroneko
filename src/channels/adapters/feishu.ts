@@ -126,15 +126,16 @@ export class FeishuChannelAdapter implements ChannelAdapter {
   }
 
   async start(onMessage: (msg: InboundMessage) => Promise<void>): Promise<void> {
-    if (this.opts.mode === 'websocket') {
-      await this.startWebSocket(onMessage);
-    } else {
-      await this.startWebhook(onMessage);
-    }
+    // 先启动 relay 连接（与飞书并行），避免等飞书 WebSocket/prefetch 完成才连 relay 导致首条群回复赶不上
     if (this.opts.relayUrl && this.opts.relayKey && this.opts.relayAgentId) {
       console.log(`[relay] 正在连接 ${this.opts.relayUrl} agent=${this.opts.relayAgentId}`);
       this.opts.relayLogger?.info('feishu', { event: 'relay.connecting', data: { url: this.opts.relayUrl, agentId: this.opts.relayAgentId } });
       this.connectRelay();
+    }
+    if (this.opts.mode === 'websocket') {
+      await this.startWebSocket(onMessage);
+    } else {
+      await this.startWebhook(onMessage);
     }
   }
 
@@ -201,18 +202,25 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     }
 
     // 群消息发送成功后向中转上报，供其它 agent 插入群聊记录
-    if (isGroup && this.opts.relayUrl && this.opts.relayKey && this.opts.relayAgentId && this.relayWs?.readyState === 1) {
-      try {
-        this.relayWs.send(JSON.stringify({
-          type:       'speak',
-          thread_id:  msg.thread_id,
-          content:    msg.content,
-          ts:         Date.now(),
-        }));
-        console.log(`[relay] 已上报群消息 speak thread=${msg.thread_id} preview=${msg.content.slice(0, 50)}...`);
-        this.opts.relayLogger?.debug('feishu', { event: 'relay.speak', data: { thread_id: msg.thread_id, preview: msg.content.slice(0, 60) } });
-      } catch {
-        // ignore
+    const relayReady = this.opts.relayUrl && this.opts.relayKey && this.opts.relayAgentId && this.relayWs?.readyState === 1;
+    if (isGroup && this.opts.relayUrl && this.opts.relayKey && this.opts.relayAgentId) {
+      if (relayReady) {
+        try {
+          this.relayWs!.send(JSON.stringify({
+            type:       'speak',
+            thread_id:  msg.thread_id,
+            content:    msg.content,
+            ts:         Date.now(),
+          }));
+          this.opts.relayLogger?.info('feishu', { event: 'relay.speak', data: { thread_id: msg.thread_id, preview: (msg.content ?? '').slice(0, 60) } });
+        } catch (e) {
+          this.opts.relayLogger?.warn('feishu', { event: 'relay.speak_error', data: { thread_id: msg.thread_id, error: String(e) } });
+        }
+      } else {
+        this.opts.relayLogger?.info('feishu', {
+          event: 'relay.speak_skipped',
+          data: { thread_id: msg.thread_id, reason: this.relayWs == null ? 'ws_not_created' : `ws_state_${this.relayWs.readyState}` },
+        });
       }
     }
   }
