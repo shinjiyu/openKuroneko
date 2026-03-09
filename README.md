@@ -52,6 +52,23 @@ node dist/cli/index.js --dir ./my-agent --loop fast
 node dist/cli/index.js --dir ./my-agent --loop interval --interval-ms 60000
 ```
 
+### Windows 用户（外脑启动）
+
+在 Windows 下请用 PowerShell 脚本，无需重装依赖：
+
+```powershell
+# 安装依赖（仅首次）
+npm install
+
+# 外脑启动（会加载项目根目录 .env）
+.\start.ps1
+
+# 停止外脑/内脑
+.\stop.ps1
+```
+
+配置（飞书、Kimi 等）写在 `.env` 中，`start.ps1` 会自动加载。Linux/macOS 仍使用 `./start.sh` / `./stop.sh`。
+
 ## Agent 目录结构
 
 每个 agent 在 `$OPENKURONEKO_TMP/<agent_id>/` 下自动创建：
