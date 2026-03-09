@@ -1,0 +1,15 @@
+{
+  "name": "openkuroneko-relay",
+  "version": "1.0.0",
+  "description": "Message relay server for multi-agent Feishu group context sync",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "node --watch dist/index.js"
+  },
+  "engines": { "node": ">=20.0.0" },
+  "dependencies": { "ws": "^8.18.0" },
+  "devDependencies": { "@types/node": "^20.0.0", "typescript": "^5.4.0" }
+}

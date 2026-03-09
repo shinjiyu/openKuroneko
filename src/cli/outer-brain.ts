@@ -33,7 +33,7 @@ import { createOuterBrain, InnerBrainPool } from '../outer-brain/index.js';
 import { resolveIdentity } from '../identity/index.js';
 import { loadConfig } from '../config/index.js';
 import { CliChannelAdapter } from '../channels/adapters/cli.js';
-import { FeishuChannelAdapter }    from '../channels/adapters/feishu.js';
+import { FeishuChannelAdapter, type RelayIngestRef } from '../channels/adapters/feishu.js';
 import { DingTalkChannelAdapter }  from '../channels/adapters/dingtalk.js';
 import { WebchatChannelAdapter }   from '../channels/adapters/webchat.js';
 
@@ -57,6 +57,9 @@ program
   .option('--feishu-mode <mode>', '飞书接入模式：webhook（需公网，默认）| websocket（长连接，推荐）')
   .option('--feishu-port <port>', '飞书 Webhook 监听端口（默认 8090，仅 webhook 模式）')
   .option('--feishu-agent-open-id <id>', '外脑的飞书 open_id（用于过滤自身消息）')
+  .option('--relay-url <url>', '消息中转服务器 WebSocket URL（如 ws://localhost:9090），与 relay-key、relay-agent-id 同配则启用')
+  .option('--relay-key <key>', '消息中转鉴权 key，与服务器 RELAY_KEY 一致')
+  .option('--relay-agent-id <id>', '本 agent 在中转上的标识（如 kuroneko）')
   .option('--dingtalk-client-id <id>',     '钉钉 AppKey（Stream 模式）')
   .option('--dingtalk-client-secret <s>',  '钉钉 AppSecret（Stream 模式）')
   .option('--escalation-wait-ms <ms>', 'BLOCK 升级等待时间（ms，默认 1800000=30min）')
@@ -93,6 +96,9 @@ const opts = program.opts<{
   feishuMode?:          string;
   feishuPort?:          string;
   feishuAgentOpenId?:   string;
+  relayUrl?:            string;
+  relayKey?:            string;
+  relayAgentId?:        string;
   dingtalkClientId?:    string;
   dingtalkClientSecret?: string;
   escalationWaitMs?:    string;
@@ -213,6 +219,11 @@ async function main() {
   // 未知用户自动注册为 "feishu_<open_id>"，管理员可事后调用 linkChannel 关联到真实身份。
   let _feishuUserStore: import('../users/store.js').UserStore | null = null;
 
+  const relayUrl    = opts.relayUrl ?? process.env['RELAY_URL'];
+  const relayKey    = opts.relayKey ?? process.env['RELAY_KEY'];
+  const relayAgentId = opts.relayAgentId ?? process.env['RELAY_AGENT_ID'];
+  const relayIngestRef: RelayIngestRef = { current: null };
+
   // websocket 模式无需 verifyToken（仅 webhook 模式需要）
   if (opts.feishuAppId && opts.feishuAppSecret && (opts.feishuVerifyToken || opts.feishuMode === 'websocket')) {
     adapters.push(new FeishuChannelAdapter({
@@ -230,8 +241,14 @@ async function main() {
         }
         return rawId; // 启动瞬间的降级（不丢消息）
       },
+      ...(relayUrl && relayKey && relayAgentId
+        ? { relayUrl, relayKey, relayAgentId, relayIngestRef }
+        : {}),
     }));
-    logger.info('cli', { event: 'channel.registered', data: { channel: 'feishu' } });
+    logger.info('cli', {
+      event: 'channel.registered',
+      data:  { channel: 'feishu', relay: !!(relayUrl && relayKey && relayAgentId) },
+    });
   }
 
   // 钉钉频道（Stream 长连接，无需公网 URL）
@@ -266,6 +283,12 @@ async function main() {
   // 将 userStore 注入各频道 resolver（创建后立即注入，start() 之前完成）
   _feishuUserStore    = ob.userStore;
   _dingtalkUserStore  = ob.userStore;
+
+  // 中转广播插入：收到其它 agent 发言时写入本机 thread，仅飞书插件侧使用
+  relayIngestRef.current = (threadId, userId, content, ts) => {
+    ob.threadStore.ensureThread(threadId, 'feishu', ts);
+    ob.threadStore.appendUser(threadId, userId, content, ts);
+  };
 
   // ── 信号处理 ──────────────────────────────────────────────────────────────
 

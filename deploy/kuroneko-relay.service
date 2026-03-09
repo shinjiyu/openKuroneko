@@ -1,0 +1,14 @@
+[Unit]
+Description=openKuroneko message relay (multi-agent Feishu sync)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/kuroneko/relay
+EnvironmentFile=/opt/kuroneko/relay/.env
+ExecStart=/usr/bin/node /opt/kuroneko/relay/dist/index.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

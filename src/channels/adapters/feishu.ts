@@ -38,8 +38,12 @@
  *   encryptKey     HTTP 模式的消息加密 Key（可选）
  *   mode           'webhook'（默认）| 'websocket'
  *   webhookPort    HTTP 模式监听端口（默认 8090）
- *   agentOpenId    Bot 自身的飞书 open_id（用于过滤自身消息、识别 @mention）
+ *   agentOpenId    Bot 的 open_id（可选；不配时用 app_id 参与 @ 判断并尝试启动时预取 open_id，参考 OpenClaw）
  *   resolveUserFn  open_id → 内部 user_id 的映射函数
+ *   relayUrl       消息中转服务器 WebSocket URL（可选；与 relayKey、relayAgentId 一起配置则启用）
+ *   relayKey       中转鉴权 key，与服务器 RELAY_KEY 一致
+ *   relayAgentId   本 agent 在中转上的标识（用于注册与广播中的 sender_agent_id）
+ *   relayIngestRef  外脑注入的 { current: (threadId, userId, content, ts) => void }，收到广播时调用
  *
  * ── thread_id 格式 ───────────────────────────────────────────────────────────
  *
@@ -47,7 +51,13 @@
  *   群聊：feishu:group:<chat_id>
  */
 
+import WebSocket from 'ws';
 import type { ChannelAdapter, InboundMessage, OutboundMessage, MessageAttachment } from '../types.js';
+
+/** 收到中转广播时插入群聊记录的回调（由外脑注入，current 在 ob 创建后赋值） */
+export interface RelayIngestRef {
+  current: ((threadId: string, userId: string, content: string, ts: number) => void) | null;
+}
 
 export interface FeishuAdapterOptions {
   appId:         string;
@@ -59,6 +69,11 @@ export interface FeishuAdapterOptions {
   webhookPort?:  number | undefined;
   agentOpenId?:  string | undefined;
   resolveUserFn: (rawUserId: string, channelId: string) => string | null;
+  /** 消息中转：URL（ws/wss）、key、本 agent 标识；与 relayIngestRef 一起由外脑注入 */
+  relayUrl?:      string | undefined;
+  relayKey?:     string | undefined;
+  relayAgentId?: string | undefined;
+  relayIngestRef?: RelayIngestRef | undefined;
 }
 
 // ── 飞书事件消息体 ────────────────────────────────────────────────────────────
@@ -74,7 +89,7 @@ interface FeishuEventBody {
       content:      string;   // JSON string，结构随 message_type 变化
       create_time:  string;
       parent_id?:   string;
-      mentions?:    Array<{ id: { open_id: string }; key: string; name: string }>;
+      mentions?:    Array<{ id: { open_id: string; app_id?: string }; key: string; name: string }>;
     };
     sender: { sender_id: { open_id: string }; sender_type: string };
   };
@@ -90,6 +105,11 @@ export class FeishuChannelAdapter implements ChannelAdapter {
   private server:            import('node:http').Server | null = null;
   private tenantAccessToken: string | null = null;
   private tokenExpireAt      = 0;
+  /** 启动时预取的 bot open_id（用于 @ 判断与过滤自身，无则用 app_id 参与匹配） */
+  private _botOpenId: string | null = null;
+  /** 中转 WebSocket（可选） */
+  private relayWs: WebSocket | null = null;
+  private relayReconnectTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts: FeishuAdapterOptions) {
     this.opts = { mode: 'webhook', ...opts };
@@ -100,6 +120,9 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       await this.startWebSocket(onMessage);
     } else {
       await this.startWebhook(onMessage);
+    }
+    if (this.opts.relayUrl && this.opts.relayKey && this.opts.relayAgentId) {
+      this.connectRelay();
     }
   }
 
@@ -112,6 +135,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     const type        = parts[1];                        // "dm" | "group"
     const peerId      = parts.slice(2).join(':');
     const receiveIdType = type === 'group' ? 'chat_id' : 'open_id';
+    const isGroup     = type === 'group';
 
     // 附件优先（图片、文件）
     const attachment = msg.attachments?.[0];
@@ -152,6 +176,20 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     if (!res.ok) {
       throw new Error(`[feishu] send failed: ${res.status} ${await res.text()}`);
     }
+
+    // 群消息发送成功后向中转上报，供其它 agent 插入群聊记录
+    if (isGroup && this.opts.relayUrl && this.opts.relayKey && this.opts.relayAgentId && this.relayWs?.readyState === 1) {
+      try {
+        this.relayWs.send(JSON.stringify({
+          type:       'speak',
+          thread_id:  msg.thread_id,
+          content:    msg.content,
+          ts:         Date.now(),
+        }));
+      } catch {
+        // ignore
+      }
+    }
   }
 
   resolveUser(rawUserId: string, channelId: string): string | null {
@@ -159,10 +197,59 @@ export class FeishuChannelAdapter implements ChannelAdapter {
   }
 
   async stop(): Promise<void> {
+    if (this.relayReconnectTimer) {
+      clearInterval(this.relayReconnectTimer);
+      this.relayReconnectTimer = null;
+    }
+    if (this.relayWs) {
+      this.relayWs.removeAllListeners();
+      this.relayWs.close();
+      this.relayWs = null;
+    }
     await new Promise<void>((resolve) => {
       if (this.server) this.server.close(() => resolve());
       else resolve();
     });
+  }
+
+  private connectRelay(): void {
+    const { relayUrl, relayKey, relayAgentId, relayIngestRef } = this.opts;
+    if (!relayUrl || !relayKey || !relayAgentId) return;
+
+    const ws = new WebSocket(relayUrl);
+    this.relayWs = ws;
+
+    ws.on('open', () => {
+      if (this.relayReconnectTimer) {
+        clearInterval(this.relayReconnectTimer);
+        this.relayReconnectTimer = null;
+      }
+      ws.send(JSON.stringify({ type: 'register', key: relayKey, agent_id: relayAgentId }));
+    });
+
+    ws.on('message', (raw: Buffer | string) => {
+      try {
+        const data = JSON.parse(typeof raw === 'string' ? raw : raw.toString('utf8')) as Record<string, unknown>;
+        if (data?.type === 'broadcast' && typeof data.thread_id === 'string' && typeof data.sender_agent_id === 'string') {
+          const threadId = data.thread_id as string;
+          const userId   = data.sender_agent_id as string;
+          const content = typeof data.content === 'string' ? data.content : '';
+          const ts      = typeof data.ts === 'number' ? data.ts : Date.now();
+          relayIngestRef?.current?.(threadId, userId, content, ts);
+        }
+      } catch {
+        // ignore malformed
+      }
+    });
+
+    ws.on('close', () => {
+      this.relayWs = null;
+      if (!this.relayReconnectTimer && relayUrl && relayKey && relayAgentId) {
+        this.relayReconnectTimer = setInterval(() => this.connectRelay(), 5000);
+      }
+    });
+
+    ws.on('error', () => { /* reconnect on close */ });
   }
 
   // ── 模式 A：HTTP Webhook ─────────────────────────────────────────────────
@@ -250,6 +337,9 @@ export class FeishuChannelAdapter implements ChannelAdapter {
           if (msg) await onMessage(msg);
         } catch { /* 解析失败静默 */ }
       },
+      // 以下事件仅注册空处理器，避免 SDK 打出 "no ... handle" 的 warn
+      'im.chat.access_event.bot_p2p_chat_entered_v1': async () => {},
+      'im.message.message_read_v1': async () => {},
     });
 
     const wsClient = new WSClient({
@@ -261,8 +351,33 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     // 保存 client 引用供 send() 使用
     this._sdkClient = client;
 
+    // 参考 OpenClaw：启动时尝试预取 bot open_id，用于 @ 判断（失败则仅用 app_id 匹配，无需用户配置）
+    await this.prefetchBotOpenId();
+
     wsClient.start({ eventDispatcher: dispatcher });
     console.info('[feishu] WebSocket long-connection started (no public URL needed)');
+  }
+
+  /**
+   * 尝试通过飞书 API 获取当前应用（机器人）的 open_id，用于精确 @ 判断。
+   * 若接口未返回或失败，仅依赖 app_id 参与 mention 匹配（飞书 @机器人 时 mention 可能带 app_id）。
+   */
+  private async prefetchBotOpenId(): Promise<void> {
+    try {
+      const token = await this.getToken();
+      const res = await fetch(
+        `https://open.feishu.cn/open-apis/application/v6/applications/${this.opts.appId}?lang=zh_cn`,
+        { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000) },
+      );
+      const data = (await res.json()) as { app?: { open_id?: string } };
+      const openId = data?.app?.open_id;
+      if (openId) {
+        this._botOpenId = openId;
+        console.info('[feishu] bot open_id prefetched for @-mention detection');
+      }
+    } catch {
+      // 忽略：无 open_id 时用 app_id 参与匹配即可
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -277,8 +392,9 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     const { message, sender } = body.event ?? {};
     if (!message) return null;
 
-    // 过滤 bot 自身
-    if (this.opts.agentOpenId && sender.sender_id.open_id === this.opts.agentOpenId) return null;
+    // 过滤本 bot 自身发出的消息（与 @ 判断一致：agentOpenId / 预取 open_id / app_id）
+    const selfIds = [this.opts.agentOpenId, this._botOpenId, this.opts.appId].filter(Boolean) as string[];
+    if (selfIds.includes(sender.sender_id.open_id)) return null;
 
     const rawUserId = sender.sender_id.open_id;
     const userId    = this.opts.resolveUserFn(rawUserId, 'feishu') ?? rawUserId;
@@ -294,13 +410,16 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     // 图片类附件：立刻下载并转为 base64 data URL，方便 LLM 多模态直接消费
     const attachments = await this.resolveAttachments(rawAttachments);
 
-    // @mention 解析
+    // @mention 解析：mentions 里包含本 bot 时才视为 @ 了自己（参考 OpenClaw，无需用户配置 open_id）
+    // 匹配方式：1) 配置的 agentOpenId 2) 启动时预取的 _botOpenId 3) app_id（飞书 @机器人 时可能为 id.open_id 或 id.app_id）
     const mentions = (message.mentions ?? []).map(
       (m) => this.opts.resolveUserFn(m.id.open_id, 'feishu') ?? m.id.open_id,
     );
-    const isMention = this.opts.agentOpenId
-      ? (message.mentions ?? []).some((m) => m.id.open_id === this.opts.agentOpenId)
-      : content.includes('@');
+    const botIds = [this.opts.agentOpenId, this._botOpenId, this.opts.appId].filter(Boolean) as string[];
+    const isMention = (message.mentions ?? []).some((m) => {
+      const id = m.id as { open_id: string; app_id?: string };
+      return botIds.includes(id.open_id) || (id.app_id && id.app_id === this.opts.appId);
+    });
 
     const cleanContent = content.replace(/@\S+/g, '').trim();
 
@@ -317,6 +436,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       reply_to:     message.parent_id,
       attachments,
       group_info:   isGroup ? { group_id: message.chat_id, group_name: message.chat_id } : undefined,
+      sender_type:  sender.sender_type === 'user' || sender.sender_type === 'app' ? sender.sender_type : undefined,
     };
   }
 

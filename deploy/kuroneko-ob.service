@@ -1,0 +1,15 @@
+[Unit]
+Description=openKuroneko outer brain
+After=network.target kuroneko-relay.service
+Wants=kuroneko-relay.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/kuroneko
+EnvironmentFile=/opt/kuroneko/.env
+ExecStart=/opt/kuroneko/start.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

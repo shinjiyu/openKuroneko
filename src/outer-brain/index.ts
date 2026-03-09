@@ -203,6 +203,28 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
       return;
     }
 
+    // 用户 @ 了别人（有 mention 但没 @ 我们）：只记入 thread，不回复
+    if (msg.mentions?.length) {
+      threadStore.getOrCreate(msg);
+      threadStore.appendUser(msg.thread_id, msg.user_id, msg.content, msg.ts);
+      logger.debug('outer-brain', {
+        event: 'group.mention_others',
+        data: { thread: msg.thread_id, mentions: msg.mentions },
+      });
+      return;
+    }
+
+    // 其它机器人的发言：只记入 thread，不回复（保持上下文完整）
+    if (msg.sender_type === 'app') {
+      threadStore.getOrCreate(msg);
+      threadStore.appendUser(msg.thread_id, msg.user_id, msg.content, msg.ts);
+      logger.debug('outer-brain', {
+        event: 'group.other_bot_message',
+        data: { thread: msg.thread_id, user: msg.user_id, preview: msg.content.slice(0, 60) },
+      });
+      return;
+    }
+
     // 非 @mention 群消息：参与决策
     const currentSoul    = soulLoader.get();
     const innerStatus    = getInnerStatus();

@@ -25,6 +25,7 @@
   "license": "MIT",
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",
+    "ws": "^8.18.0",
     "chokidar": "^4.0.0",
     "commander": "^12.0.0",
     "dingtalk-stream": "^2.1.4",

@@ -25,10 +25,12 @@ INNER_DIR="${INNER_DIR:-${SCRIPT_DIR}/chat-agent}"
 OB_DIR="${OB_DIR:-${SCRIPT_DIR}/ob-agent}"
 
 # ── 内脑启动命令（set_goal 时自动拉起）──────────────────────────────────────
-# 使用 tsx 直接运行源码（开发环境）
-INNER_CMD="${INNER_CMD:-tsx ${SCRIPT_DIR}/src/cli/index.ts --dir ${INNER_DIR} --loop fast}"
-# 生产环境改用编译产物：
-# INNER_CMD="node ${SCRIPT_DIR}/dist/cli/index.js --dir ${INNER_DIR} --loop fast"
+# 若存在 dist 则用 node（生产），否则用 tsx（开发）
+if [ -f "${SCRIPT_DIR}/dist/cli/index.js" ]; then
+  INNER_CMD="${INNER_CMD:-node ${SCRIPT_DIR}/dist/cli/index.js --dir ${INNER_DIR} --loop fast}"
+else
+  INNER_CMD="${INNER_CMD:-tsx ${SCRIPT_DIR}/src/cli/index.ts --dir ${INNER_DIR} --loop fast}"
+fi
 
 # ── WebChat 配置 ──────────────────────────────────────────────────────────────
 WEBCHAT_PORT="${WEBCHAT_PORT:-8091}"      # 默认开启 WebChat，端口 8091
@@ -43,6 +45,12 @@ FEISHU_VERIFY_TOKEN="${FEISHU_VERIFY_TOKEN:-}"   # webhook 模式必填
 FEISHU_ENCRYPT_KEY="${FEISHU_ENCRYPT_KEY:-}"     # webhook 模式可选
 FEISHU_PORT="${FEISHU_PORT:-8090}"               # webhook 模式端口
 FEISHU_AGENT_OPEN_ID="${FEISHU_AGENT_OPEN_ID:-}"
+
+# ── 消息中转（多 agent 群聊上下文同步）──────────────────────────────────────
+# 与 relay 服务同配：RELAY_URL=ws://localhost:9090 RELAY_KEY=xxx RELAY_AGENT_ID=kuroneko
+RELAY_URL="${RELAY_URL:-}"
+RELAY_KEY="${RELAY_KEY:-}"
+RELAY_AGENT_ID="${RELAY_AGENT_ID:-}"
 
 # ── 钉钉配置（Stream 长连接，无需公网 URL）────────────────────────────────────
 # 开启方式：DINGTALK=1 DINGTALK_CLIENT_ID=xxx DINGTALK_CLIENT_SECRET=yyy ./start.sh
@@ -100,6 +108,14 @@ if [ -n "${DINGTALK}" ] && [ -n "${DINGTALK_CLIENT_ID}" ]; then
   )
 fi
 
+if [ -n "${RELAY_URL}" ] && [ -n "${RELAY_KEY}" ] && [ -n "${RELAY_AGENT_ID}" ]; then
+  OB_ARGS+=(
+    --relay-url     "${RELAY_URL}"
+    --relay-key     "${RELAY_KEY}"
+    --relay-agent-id "${RELAY_AGENT_ID}"
+  )
+fi
+
 # ── 启动前提示 ────────────────────────────────────────────────────────────────
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo " openKuroneko 外脑启动"
@@ -110,10 +126,15 @@ echo " 内脑命令 : ${INNER_CMD}"
 [ -n "${WEBCHAT_PORT}" ] && echo " WebChat  : http://localhost:${WEBCHAT_PORT}"
 [ -n "${FEISHU}"       ] && echo " 飞书     : ${FEISHU_MODE} 模式"
 [ -n "${DINGTALK}"     ] && echo " 钉钉     : Stream 模式（App: ${DINGTALK_CLIENT_ID}）"
+[ -n "${RELAY_URL}"    ] && echo " 消息中转 : ${RELAY_URL} (agent: ${RELAY_AGENT_ID})"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo " 内脑在收到第一个任务目标时自动启动，无任务时不运行。"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
 # ── 启动外脑 ──────────────────────────────────────────────────────────────────
-exec npx tsx "${SCRIPT_DIR}/src/cli/outer-brain.ts" "${OB_ARGS[@]}"
+if [ -f "${SCRIPT_DIR}/dist/cli/outer-brain.js" ]; then
+  exec node "${SCRIPT_DIR}/dist/cli/outer-brain.js" "${OB_ARGS[@]}"
+else
+  exec npx tsx "${SCRIPT_DIR}/src/cli/outer-brain.ts" "${OB_ARGS[@]}"
+fi

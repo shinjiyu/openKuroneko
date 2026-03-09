@@ -70,6 +70,32 @@ export class ThreadStore {
     return thread;
   }
 
+  /**
+   * 确保 thread 存在（用于中转广播插入：仅有 thread_id 时先建 thread 再 appendUser）。
+   * 若已存在则更新 last_msg_at；否则按 thread_id 解析 type/peer_id 创建最小 Thread。
+   */
+  ensureThread(threadId: string, channelId: string, ts: number): Thread {
+    const existing = this.records.get(threadId);
+    if (existing) {
+      existing.thread.last_msg_at = ts;
+      return existing.thread;
+    }
+    const parts  = threadId.split(':');
+    const type   = parts[1] === 'group' ? 'group' : 'dm';
+    const peerId = parts.slice(2).join(':');
+    const thread: Thread = {
+      thread_id:   threadId,
+      channel_id:  channelId,
+      type,
+      peer_id:     peerId,
+      created_at:  ts,
+      last_msg_at: ts,
+    };
+    this.records.set(threadId, { thread, history: [] });
+    this.saveThread(thread);
+    return thread;
+  }
+
   getThread(threadId: string): Thread | undefined {
     return this.records.get(threadId)?.thread;
   }
