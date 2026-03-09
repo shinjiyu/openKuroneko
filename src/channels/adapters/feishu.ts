@@ -38,7 +38,10 @@
  *   encryptKey     HTTP 模式的消息加密 Key（可选）
  *   mode           'webhook'（默认）| 'websocket'
  *   webhookPort    HTTP 模式监听端口（默认 8090）
- *   agentOpenId    本机（机器人）的 open_id，用于 @ 判断与过滤自身消息；配置后按 open_id 与 mentions 匹配（推荐）
+ *   agentOpenId    本机（机器人）的 open_id，用于过滤自身消息（事件里 sender 为 open_id）
+ *   agentUnionId   本机（机器人）的 union_id，用于 @ 识别（与 mentions 的 union_id 匹配）；内部主 id 为 union_id 时推荐配置
+ *   onFeishuIdsSeen  收到事件时写入 open_id ↔ union_id 映射（用于 getOpenIdForUnionId）
+ *   getOpenIdForUnionId  union_id → 本应用 open_id，发私信 API 时使用
  *   resolveUserFn  open_id → 内部 user_id 的映射函数
  *   relayUrl       消息中转服务器 WebSocket URL（可选；与 relayKey、relayAgentId 一起配置则启用）
  *   relayKey       中转鉴权 key，与服务器 RELAY_KEY 一致
@@ -47,7 +50,7 @@
  *
  * ── thread_id 格式 ───────────────────────────────────────────────────────────
  *
- *   私信：feishu:dm:<open_id>
+ *   私信：feishu:dm:<canonical_user_id>（有 union_id 时为 union_id，否则为 open_id）
  *   群聊：feishu:group:<chat_id>
  */
 
@@ -68,8 +71,15 @@ export interface FeishuAdapterOptions {
   /** 'webhook'（HTTP 回调，需公网）| 'websocket'（长连接，推荐） */
   mode?:         'webhook' | 'websocket';
   webhookPort?:  number | undefined;
-  agentOpenId?:  string | undefined;
+  /** 本机（机器人）在本应用下的 open_id，用于过滤自身消息与 @ 判定 */
+  agentOpenId?:    string | undefined;
+  /** 本机（机器人）的 union_id，用于 @ 判定（多 agent 时配置此项，与 agentOpenId 二选一或同时配置） */
+  agentUnionId?:  string | undefined;
   resolveUserFn: (rawUserId: string, channelId: string) => string | null;
+  /** 用 union_id 查本应用下 open_id（DM 发消息时需将 thread 的 union_id 解析为 open_id） */
+  getOpenIdForUnionId?: (unionId: string) => string | null;
+  /** 收到事件后合并 open_id/union_id/name 到映射表（用于维护 union_id↔open_id） */
+  onFeishuIdsSeen?: (entries: Array<{ openId: string; unionId?: string; name?: string }>) => void;
   /** 消息中转：URL（ws/wss）、key、本 agent 标识；与 relayIngestRef 一起由外脑注入 */
   relayUrl?:      string | undefined;
   relayKey?:     string | undefined;
@@ -98,10 +108,10 @@ interface FeishuEventBody {
       content:      string;   // JSON string，结构随 message_type 变化
       create_time:  string;
       parent_id?:   string;
-      /** 被 @ 的用户用 open_id 等标识，被 @ 的机器人用 app_id 标识（id 为 app_id 字符串或含 app_id 的对象） */
-      mentions?:    Array<{ id: string | { open_id?: string; app_id?: string }; key: string; name: string }>;
+      /** 被 @ 的用户/机器人；id 可能含 open_id、union_id、app_id（飞书会带 union_id 时需对应权限） */
+      mentions?:    Array<{ id: string | { open_id?: string; union_id?: string; app_id?: string }; key: string; name: string }>;
     };
-    sender: { sender_id: { open_id: string }; sender_type: string };
+    sender: { sender_id: { open_id: string; union_id?: string }; sender_type: string };
   };
 }
 
@@ -144,11 +154,22 @@ export class FeishuChannelAdapter implements ChannelAdapter {
   async send(msg: OutboundMessage): Promise<void> {
     const token = await this.getToken();
 
-    const parts       = msg.thread_id.split(':');
-    const type        = parts[1];                        // "dm" | "group"
-    const peerId      = parts.slice(2).join(':');
-    const receiveIdType = type === 'group' ? 'chat_id' : 'open_id';
-    const isGroup     = type === 'group';
+    const parts  = msg.thread_id.split(':');
+    const type  = parts[1];                   // "dm" | "group"
+    let peerId  = parts.slice(2).join(':');
+    const isGroup = type === 'group';
+
+    // DM 时 peerId 可能为 union_id（on_xxx），需解析为本应用 open_id 再调 API
+    let receiveIdType: 'chat_id' | 'open_id' | 'union_id' = type === 'group' ? 'chat_id' : 'open_id';
+    if (!isGroup && peerId.startsWith('on_') && this.opts.getOpenIdForUnionId) {
+      const openId = this.opts.getOpenIdForUnionId(peerId);
+      if (openId) {
+        peerId = openId;
+        receiveIdType = 'open_id';
+      } else {
+        receiveIdType = 'union_id';
+      }
+    }
 
     // 附件优先（图片、文件）
     const attachment = msg.attachments?.[0];
@@ -479,17 +500,43 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     const { message, sender } = body.event ?? {};
     if (!message) return null;
 
-    // 过滤本 bot 自身发出的消息（与 @ 判断一致：agentOpenId / 预取 open_id / app_id）
-    const selfIds = [this.opts.agentOpenId, this._botOpenId, this.opts.appId].filter(Boolean) as string[];
-    if (selfIds.includes(sender.sender_id.open_id)) return null;
+    const senderOpenId = sender.sender_id.open_id;
+    const senderUnionId = (sender.sender_id as { union_id?: string }).union_id?.trim();
 
-    const rawUserId = sender.sender_id.open_id;
-    const userId    = this.opts.resolveUserFn(rawUserId, 'feishu') ?? rawUserId;
+    // 过滤本 bot 自身发出的消息（用 open_id 判断，事件里 sender 始终是 open_id）
+    const selfOpenIds = [this.opts.agentOpenId, this._botOpenId].filter(Boolean) as string[];
+    if (selfOpenIds.includes(senderOpenId)) return null;
 
-    const isGroup  = message.chat_type !== 'p2p';
+    // 从事件中抽取 open_id / union_id / name，写入映射表（内部以 union_id 为主 id 时需维护 union_id↔open_id）
+    const getIdParts = (id: unknown): { openId: string; unionId?: string } => {
+      if (id == null) return { openId: '' };
+      if (typeof id === 'string') return { openId: id.trim() };
+      const o = id as Record<string, unknown>;
+      const openId = typeof o['open_id'] === 'string' ? (o['open_id'] as string).trim() : '';
+      const unionId = typeof o['union_id'] === 'string' ? (o['union_id'] as string).trim() : undefined;
+      return unionId === undefined ? { openId } : { openId, unionId };
+    };
+    const idEntries: Array<{ openId: string; unionId?: string; name?: string }> = [
+      senderUnionId === undefined ? { openId: senderOpenId } : { openId: senderOpenId, unionId: senderUnionId },
+    ];
+    const rawMentions = message.mentions ?? [];
+    for (const m of rawMentions) {
+      const { openId, unionId } = getIdParts(m.id);
+      if (openId) {
+        const name = (m as { name?: string }).name?.trim();
+        idEntries.push({ openId, ...(unionId !== undefined && { unionId }), ...(name !== undefined && name !== '' && { name }) });
+      }
+    }
+    this.opts.onFeishuIdsSeen?.(idEntries);
+
+    // 内部以 union_id 为主 id：有 union_id 用 union_id，否则回退 open_id
+    const canonicalSenderId = senderUnionId || senderOpenId;
+    const userId = this.opts.resolveUserFn(canonicalSenderId, 'feishu') ?? canonicalSenderId;
+
+    const isGroup = message.chat_type !== 'p2p';
     const threadId = isGroup
       ? `feishu:group:${message.chat_id}`
-      : `feishu:dm:${rawUserId}`;
+      : `feishu:dm:${canonicalSenderId}`;
 
     // 解析消息内容（按 message_type 分发）
     const { content, attachments: rawAttachments } = parseFeishuContent(message.message_type, message.content);
@@ -497,34 +544,34 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     // 图片类附件：立刻下载并转为 base64 data URL，方便 LLM 多模态直接消费
     const attachments = await this.resolveAttachments(rawAttachments);
 
-    // @mention 解析：用配置的 agentOpenId（或预取 _botOpenId）与 mentions[].id 的 open_id 匹配
-    const getMentionOpenId = (id: unknown): string => {
-      if (id == null) return '';
-      if (typeof id === 'string') return id.trim();
-      const o = id as Record<string, unknown>;
-      const v = o['open_id'];
-      return typeof v === 'string' ? v.trim() : '';
-    };
-    const rawMentions = message.mentions ?? [];
+    // @mention 解析：内部统一用 union_id（有则用，无则 open_id）
     const mentions = rawMentions.map((m) => {
-      const openId = getMentionOpenId(m.id);
-      if (openId) return this.opts.resolveUserFn(openId, 'feishu') ?? openId;
+      const { openId, unionId } = getIdParts(m.id);
+      const canonical = unionId || openId;
+      if (canonical) return this.opts.resolveUserFn(canonical, 'feishu') ?? canonical;
       return typeof m.id === 'string' ? m.id : '';
     });
 
+    // Agent 自我识别：支持 open_id 或 union_id（你配置 agentUnionId 后按 union_id 匹配）
     const botOpenId = (this.opts.agentOpenId ?? this._botOpenId)?.trim() ?? '';
-    const mentionOpenIds = rawMentions.map((m) => getMentionOpenId(m.id));
-    const isMention = botOpenId !== '' && mentionOpenIds.some((oid) => oid === botOpenId);
+    const botUnionId = this.opts.agentUnionId?.trim() ?? '';
+    const mentionOpenIds = rawMentions.map((m) => getIdParts(m.id).openId);
+    const mentionUnionIds = rawMentions.map((m) => getIdParts(m.id).unionId).filter(Boolean) as string[];
+    const isMention =
+      (botOpenId !== '' && mentionOpenIds.some((oid) => oid === botOpenId)) ||
+      (botUnionId !== '' && mentionUnionIds.some((uid) => uid === botUnionId));
 
     if (isGroup && rawMentions.length > 0 && this.opts.logger) {
       this.opts.logger.info('feishu', {
         event: 'mention.eval',
         data: {
-          thread_id:       threadId,
-          bot_open_id:     botOpenId || null,
+          thread_id:        threadId,
+          bot_open_id:      botOpenId || null,
+          bot_union_id:     botUnionId || null,
           mention_open_ids: mentionOpenIds,
-          is_mention:      isMention,
-          preview:         content.slice(0, 60),
+          mention_union_ids: mentionUnionIds,
+          is_mention:       isMention,
+          preview:          content.slice(0, 60),
         },
       });
     }
@@ -549,7 +596,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       thread_id:    threadId,
       channel_id:   'feishu',
       user_id:      userId,
-      raw_user_id:  rawUserId,
+      raw_user_id:  senderOpenId,
       content:      cleanContent,
       is_mention:   isMention,
       mentions,

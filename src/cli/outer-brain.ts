@@ -35,6 +35,7 @@ import { loadConfig } from '../config/index.js';
 import { CliChannelAdapter } from '../channels/adapters/cli.js';
 import { FeishuChannelAdapter, type RelayIngestRef } from '../channels/adapters/feishu.js';
 import { DingTalkChannelAdapter }  from '../channels/adapters/dingtalk.js';
+import { FeishuOpenIdMap } from '../users/feishu-openid-map.js';
 import { WebchatChannelAdapter }   from '../channels/adapters/webchat.js';
 
 // ── CLI 定义 ──────────────────────────────────────────────────────────────────
@@ -56,7 +57,8 @@ program
   .option('--feishu-encrypt-key <key>', '飞书 HTTP Webhook 消息加密 Key（可选）')
   .option('--feishu-mode <mode>', '飞书接入模式：webhook（需公网，默认）| websocket（长连接，推荐）')
   .option('--feishu-port <port>', '飞书 Webhook 监听端口（默认 8090，仅 webhook 模式）')
-  .option('--feishu-agent-open-id <id>', '外脑的飞书 open_id（用于过滤自身消息）')
+  .option('--feishu-agent-open-id <id>', '本机（机器人）在本应用下的 open_id，用于过滤自身消息与 @ 判定')
+  .option('--feishu-agent-union-id <id>', '本机（机器人）的 union_id，用于 @ 判定（多 agent 时配置，与 open_id 可同时配置）')
   .option('--relay-url <url>', '消息中转服务器 WebSocket URL（如 ws://localhost:9090），与 relay-key、relay-agent-id 同配则启用')
   .option('--relay-key <key>', '消息中转鉴权 key，与服务器 RELAY_KEY 一致')
   .option('--relay-agent-id <id>', '本 agent 在中转上的标识（如 kuroneko）')
@@ -96,6 +98,7 @@ const opts = program.opts<{
   feishuMode?:          string;
   feishuPort?:          string;
   feishuAgentOpenId?:   string;
+  feishuAgentUnionId?:  string;
   relayUrl?:            string;
   relayKey?:            string;
   relayAgentId?:        string;
@@ -239,7 +242,13 @@ async function main() {
   const feishuAgentOpenId = opts.feishuAgentOpenId?.trim()
     || process.env['FEISHU_AGENT_OPEN_ID']?.trim()
     || undefined;
+  const feishuAgentUnionId = opts.feishuAgentUnionId?.trim()
+    || process.env['FEISHU_AGENT_UNION_ID']?.trim()
+    || undefined;
+
+  let feishuOpenIdMap: FeishuOpenIdMap | null = null;
   if (opts.feishuAppId && opts.feishuAppSecret && (opts.feishuVerifyToken || opts.feishuMode === 'websocket')) {
+    feishuOpenIdMap = new FeishuOpenIdMap(obDir);
     adapters.push(new FeishuChannelAdapter({
       appId:        opts.feishuAppId,
       appSecret:    opts.feishuAppSecret,
@@ -248,13 +257,15 @@ async function main() {
       mode:         (opts.feishuMode as 'webhook' | 'websocket' | undefined) ?? 'webhook',
       webhookPort:  opts.feishuPort ? parseInt(opts.feishuPort, 10) : 8090,
       agentOpenId:  feishuAgentOpenId,
-      logger, // 群消息未识别为 @ 时会打 debug（mention.check），便于排查不回复
+      agentUnionId: feishuAgentUnionId,
+      onFeishuIdsSeen: (entries) => feishuOpenIdMap?.merge(entries),
+      getOpenIdForUnionId: (uid) => feishuOpenIdMap?.getOpenIdForUnionId(uid) ?? null,
+      logger,
       resolveUserFn: (rawId, channelId) => {
         if (_feishuUserStore) {
-          // 先查已有映射；未找到则自动注册（autoRegister=true）
           return _feishuUserStore.resolveUser(rawId, channelId, true) ?? rawId;
         }
-        return rawId; // 启动瞬间的降级（不丢消息）
+        return rawId;
       },
       ...(relayUrl && relayKey && relayAgentId
         ? { relayUrl, relayKey, relayAgentId, relayIngestRef, relayLogger: logger }

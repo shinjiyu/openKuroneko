@@ -45,6 +45,7 @@ FEISHU_VERIFY_TOKEN="${FEISHU_VERIFY_TOKEN:-}"   # webhook 模式必填
 FEISHU_ENCRYPT_KEY="${FEISHU_ENCRYPT_KEY:-}"     # webhook 模式可选
 FEISHU_PORT="${FEISHU_PORT:-8090}"               # webhook 模式端口
 FEISHU_AGENT_OPEN_ID="${FEISHU_AGENT_OPEN_ID:-}"
+FEISHU_AGENT_UNION_ID="${FEISHU_AGENT_UNION_ID:-}"
 
 # ── 消息中转（多 agent 群聊上下文同步）──────────────────────────────────────
 # 与 relay 服务同配：RELAY_URL=ws://localhost:9090 RELAY_KEY=xxx RELAY_AGENT_ID=kuroneko
@@ -98,7 +99,8 @@ if [ -n "${FEISHU}" ] && [ -n "${FEISHU_APP_ID}" ]; then
     [ -n "${FEISHU_ENCRYPT_KEY}"  ] && OB_ARGS+=(--feishu-encrypt-key  "${FEISHU_ENCRYPT_KEY}")
     OB_ARGS+=(--feishu-port "${FEISHU_PORT}")
   fi
-  [ -n "${FEISHU_AGENT_OPEN_ID}" ] && OB_ARGS+=(--feishu-agent-open-id "${FEISHU_AGENT_OPEN_ID}")
+  [ -n "${FEISHU_AGENT_OPEN_ID}" ]   && OB_ARGS+=(--feishu-agent-open-id   "${FEISHU_AGENT_OPEN_ID}")
+  [ -n "${FEISHU_AGENT_UNION_ID}" ] && OB_ARGS+=(--feishu-agent-union-id  "${FEISHU_AGENT_UNION_ID}")
 fi
 
 if [ -n "${DINGTALK}" ] && [ -n "${DINGTALK_CLIENT_ID}" ]; then
