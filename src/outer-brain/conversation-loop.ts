@@ -199,9 +199,13 @@ function buildSystemPrompt(
     `- 如需停止当前任务并重新派发，先调用 stop_inner_brain，再调用 set_goal`,
   ].join('\n');
 
+  const groupReplyRule = isGroup
+    ? `\n【群聊回复】当前是群聊，请尽量用简短内容回复（一两句、口语化即可），避免长段落和 1.2.3. 列表，像真人接话。需要展开时再展开。\n`
+    : '';
+
   return `你是 ${soul.name}，${soul.persona}。
 当前场景：${statusDesc}（thread: ${msg.thread_id}）
-语言：${soul.language}
+语言：${soul.language}${groupReplyRule}
 ${threadList}
 
 ${permissionRules}
