@@ -269,7 +269,7 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
         data: { thread: msg.thread_id, reason: 'proactive' },
       });
       participationEngine.recordSpeak(msg.thread_id);
-      await runConversation(msg, { skipAppendUser: opts?.alreadyAppended });
+      await runConversation(msg, opts?.alreadyAppended ? { skipAppendUser: true } : undefined);
     } else {
       if (!opts?.alreadyAppended) {
         threadStore.getOrCreate(msg);
