@@ -33,8 +33,9 @@ import { createOuterBrain, InnerBrainPool } from '../outer-brain/index.js';
 import { resolveIdentity } from '../identity/index.js';
 import { loadConfig } from '../config/index.js';
 import { CliChannelAdapter } from '../channels/adapters/cli.js';
-import { FeishuChannelAdapter } from '../channels/adapters/feishu.js';
-import { WebchatChannelAdapter } from '../channels/adapters/webchat.js';
+import { FeishuChannelAdapter }    from '../channels/adapters/feishu.js';
+import { DingTalkChannelAdapter }  from '../channels/adapters/dingtalk.js';
+import { WebchatChannelAdapter }   from '../channels/adapters/webchat.js';
 
 // ── CLI 定义 ──────────────────────────────────────────────────────────────────
 
@@ -56,6 +57,8 @@ program
   .option('--feishu-mode <mode>', '飞书接入模式：webhook（需公网，默认）| websocket（长连接，推荐）')
   .option('--feishu-port <port>', '飞书 Webhook 监听端口（默认 8090，仅 webhook 模式）')
   .option('--feishu-agent-open-id <id>', '外脑的飞书 open_id（用于过滤自身消息）')
+  .option('--dingtalk-client-id <id>',     '钉钉 AppKey（Stream 模式）')
+  .option('--dingtalk-client-secret <s>',  '钉钉 AppSecret（Stream 模式）')
   .option('--escalation-wait-ms <ms>', 'BLOCK 升级等待时间（ms，默认 1800000=30min）')
   .option(
     '--inner-cmd <cmd>',
@@ -90,6 +93,8 @@ const opts = program.opts<{
   feishuMode?:          string;
   feishuPort?:          string;
   feishuAgentOpenId?:   string;
+  dingtalkClientId?:    string;
+  dingtalkClientSecret?: string;
   escalationWaitMs?:    string;
   innerCmd?:            string;
   maxConcurrent?:       string;
@@ -225,6 +230,22 @@ async function main() {
     logger.info('cli', { event: 'channel.registered', data: { channel: 'feishu' } });
   }
 
+  // 钉钉频道（Stream 长连接，无需公网 URL）
+  let _dingtalkUserStore: import('../users/store.js').UserStore | null = null;
+  if (opts.dingtalkClientId && opts.dingtalkClientSecret) {
+    adapters.push(new DingTalkChannelAdapter({
+      clientId:     opts.dingtalkClientId,
+      clientSecret: opts.dingtalkClientSecret,
+      resolveUserFn: (rawId, channelId) => {
+        if (_dingtalkUserStore) {
+          return _dingtalkUserStore.resolveUser(rawId, channelId, true) ?? rawId;
+        }
+        return rawId;
+      },
+    }));
+    logger.info('cli', { event: 'channel.registered', data: { channel: 'dingtalk' } });
+  }
+
   // ── 创建外脑 ──────────────────────────────────────────────────────────────
 
   const ob = createOuterBrain({
@@ -238,8 +259,9 @@ async function main() {
     ...(fastLlm ? { fastLlm } : {}),
   });
 
-  // 将 userStore 注入 Feishu resolver（创建后立即注入，start() 之前完成）
-  _feishuUserStore = ob.userStore;
+  // 将 userStore 注入各频道 resolver（创建后立即注入，start() 之前完成）
+  _feishuUserStore    = ob.userStore;
+  _dingtalkUserStore  = ob.userStore;
 
   // ── 信号处理 ──────────────────────────────────────────────────────────────
 

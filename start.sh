@@ -8,6 +8,7 @@
 #   ./start.sh                        # 使用默认配置
 #   WEBCHAT_PORT=8091 ./start.sh      # 开启 WebChat
 #   FEISHU=1 ./start.sh               # 开启飞书（需配置下方 FEISHU_* 变量）
+#   DINGTALK=1 ./start.sh             # 开启钉钉（需配置下方 DINGTALK_* 变量）
 #
 # 环境变量（可在此处修改，或通过 .env 文件注入）：
 # ─────────────────────────────────────────────────────────────────────────────
@@ -42,6 +43,12 @@ FEISHU_VERIFY_TOKEN="${FEISHU_VERIFY_TOKEN:-}"   # webhook 模式必填
 FEISHU_ENCRYPT_KEY="${FEISHU_ENCRYPT_KEY:-}"     # webhook 模式可选
 FEISHU_PORT="${FEISHU_PORT:-8090}"               # webhook 模式端口
 FEISHU_AGENT_OPEN_ID="${FEISHU_AGENT_OPEN_ID:-}"
+
+# ── 钉钉配置（Stream 长连接，无需公网 URL）────────────────────────────────────
+# 开启方式：DINGTALK=1 DINGTALK_CLIENT_ID=xxx DINGTALK_CLIENT_SECRET=yyy ./start.sh
+DINGTALK="${DINGTALK:-}"                           # 留空则不开启钉钉频道
+DINGTALK_CLIENT_ID="${DINGTALK_CLIENT_ID:-}"       # 钉钉 AppKey
+DINGTALK_CLIENT_SECRET="${DINGTALK_CLIENT_SECRET:-}" # 钉钉 AppSecret
 
 # ── 快速模型配置（群聊参与决策用，无 thinking，降低分类延迟）──────────────────
 # 推荐填入无 thinking 的 flash 级模型；留空则回退到主对话模型（慢）
@@ -86,6 +93,13 @@ if [ -n "${FEISHU}" ] && [ -n "${FEISHU_APP_ID}" ]; then
   [ -n "${FEISHU_AGENT_OPEN_ID}" ] && OB_ARGS+=(--feishu-agent-open-id "${FEISHU_AGENT_OPEN_ID}")
 fi
 
+if [ -n "${DINGTALK}" ] && [ -n "${DINGTALK_CLIENT_ID}" ]; then
+  OB_ARGS+=(
+    --dingtalk-client-id     "${DINGTALK_CLIENT_ID}"
+    --dingtalk-client-secret "${DINGTALK_CLIENT_SECRET}"
+  )
+fi
+
 # ── 启动前提示 ────────────────────────────────────────────────────────────────
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo " openKuroneko 外脑启动"
@@ -94,7 +108,8 @@ echo " 外脑目录 : ${OB_DIR}"
 echo " 内脑目录 : ${INNER_DIR}"
 echo " 内脑命令 : ${INNER_CMD}"
 [ -n "${WEBCHAT_PORT}" ] && echo " WebChat  : http://localhost:${WEBCHAT_PORT}"
-[ -n "${FEISHU}"       ] && echo " 飞书     : Webhook :${FEISHU_PORT}"
+[ -n "${FEISHU}"       ] && echo " 飞书     : ${FEISHU_MODE} 模式"
+[ -n "${DINGTALK}"     ] && echo " 钉钉     : Stream 模式（App: ${DINGTALK_CLIENT_ID}）"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo " 内脑在收到第一个任务目标时自动启动，无任务时不运行。"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
