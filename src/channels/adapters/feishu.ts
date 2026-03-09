@@ -347,6 +347,8 @@ export class FeishuChannelAdapter implements ChannelAdapter {
         setTimeout(() => this.seenEventIds.delete(eventId), 60_000);
       }
 
+      this.logRawSdkEvent((parsed as FeishuEventBody)?.event, 'webhook');
+
       try {
         const msg = await this.parseEvent(parsed as FeishuEventBody);
         if (msg) await onMessage(msg);
@@ -374,6 +376,9 @@ export class FeishuChannelAdapter implements ChannelAdapter {
 
     const dispatcher = new EventDispatcher({}).register({
       'im.message.receive_v1': async (data: unknown) => {
+        // SDK 底层：记录收到的最原始 event 结构（content 截断，避免 base64 等撑爆日志）
+        this.logRawSdkEvent(data, 'ws');
+
         // SDK 已经解包好了事件，data 是 event body
         const body = { header: {}, event: data } as unknown as FeishuEventBody;
 
@@ -438,6 +443,35 @@ export class FeishuChannelAdapter implements ChannelAdapter {
 
   // 已处理的事件 ID（HTTP 模式去重用）
   private readonly seenEventIds = new Set<string>();
+
+  /**
+   * 在 SDK 底层打原始 event 日志，便于查看飞书下发的完整数据结构（如 mentions 格式）。
+   * content 截断至 800 字符，避免 base64 等撑爆日志。
+   */
+  private logRawSdkEvent(eventPayload: unknown, source: 'ws' | 'webhook'): void {
+    if (!this.opts.logger) return;
+    const raw = eventPayload as Record<string, unknown> | null | undefined;
+    if (!raw || typeof raw !== 'object') {
+      this.opts.logger.info('feishu', { event: 'sdk.raw_receive', data: { source, raw: eventPayload } });
+      return;
+    }
+    const message = raw['message'] as Record<string, unknown> | undefined;
+    let safeRaw: Record<string, unknown> = { ...raw };
+    if (message && typeof message === 'object') {
+      const content = message['content'];
+      const truncated =
+        typeof content === 'string'
+          ? content.length > 800
+            ? content.slice(0, 800) + '...[truncated ' + (content.length - 800) + ' chars]'
+            : content
+          : content;
+      safeRaw = { ...raw, message: { ...message, content: truncated } };
+    }
+    this.opts.logger.info('feishu', {
+      event: 'sdk.raw_receive',
+      data: { source, raw: safeRaw },
+    });
+  }
 
   // ── 事件解析 ─────────────────────────────────────────────────────────────
 
