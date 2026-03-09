@@ -25,18 +25,28 @@ interface AgentConnection {
 
 const connections = new Map<string, AgentConnection>();
 
-function broadcast(excludeAgentId: string, payload: object): void {
+function connectionIds(): string[] {
+  return Array.from(connections.keys()).sort();
+}
+
+function broadcast(excludeAgentId: string, payload: object): number {
   const raw = JSON.stringify(payload);
+  let sent = 0;
   for (const [agentId, conn] of connections) {
     if (agentId === excludeAgentId) continue;
     if (conn.ws.readyState === 1) {
       try {
         conn.ws.send(raw);
-      } catch {
-        // ignore
+        sent++;
+        console.log(`[relay] broadcast sent to agent_id=${agentId}`);
+      } catch (e) {
+        console.log(`[relay] broadcast send failed agent_id=${agentId} error=${String(e)}`);
       }
+    } else {
+      console.log(`[relay] broadcast skip agent_id=${agentId} readyState=${conn.ws.readyState}`);
     }
   }
+  return sent;
 }
 
 function parseMessage(data: Buffer | string): unknown {
@@ -51,18 +61,23 @@ function parseMessage(data: Buffer | string): unknown {
 const wss = new WebSocketServer({ port: PORT });
 
 wss.on('connection', (ws, req) => {
+  const remote = req.socket?.remoteAddress ?? 'unknown';
+  console.log(`[relay] connection open remote=${remote} (waiting register)`);
   let agentId: string | null = null;
 
   ws.on('message', (raw) => {
     const msg = parseMessage(raw as Buffer);
-    if (!msg || typeof msg !== 'object' || !('type' in msg)) return;
+    if (!msg || typeof msg !== 'object' || !('type' in msg)) {
+      console.log(`[relay] message ignored (invalid or missing type)`);
+      return;
+    }
 
     const type = (msg as { type?: string }).type;
 
     if (type === 'register') {
       const { key, agent_id } = msg as { key?: string; agent_id?: string };
       if (key !== RELAY_KEY || !agent_id) {
-        console.log(`[relay] register rejected (invalid key or missing agent_id)`);
+        console.log(`[relay] register rejected agent_id=${agent_id ?? 'missing'} key_ok=${key === RELAY_KEY}`);
         ws.send(JSON.stringify({ type: 'error', message: 'invalid key or missing agent_id' }));
         ws.close();
         return;
@@ -70,11 +85,12 @@ wss.on('connection', (ws, req) => {
       agentId = agent_id;
       connections.set(agent_id, { agentId: agent_id, ws, registeredAt: Date.now() });
       ws.send(JSON.stringify({ type: 'registered', agent_id: agent_id }));
-      console.log(`[relay] registered agent_id=${agent_id} total_connections=${connections.size}`);
+      console.log(`[relay] registered agent_id=${agent_id} total=${connections.size} current_agents=[${connectionIds().join(', ')}]`);
       return;
     }
 
     if (!agentId) {
+      console.log(`[relay] reject type=${type} (send register first)`);
       ws.send(JSON.stringify({ type: 'error', message: 'send register first' }));
       return;
     }
@@ -86,9 +102,13 @@ wss.on('connection', (ws, req) => {
         ts?: number;
         message_id?: string;
       };
-      if (!thread_id || content === undefined) return;
-      const others = connections.size - 1;
-      broadcast(agentId, {
+      if (!thread_id || content === undefined) {
+        console.log(`[relay] speak ignored agent_id=${agentId} (missing thread_id or content)`);
+        return;
+      }
+      const peerIds = connectionIds().filter((id) => id !== agentId);
+      console.log(`[relay] speak agent_id=${agentId} thread_id=${thread_id} peers=[${peerIds.join(', ')}]`);
+      const sent = broadcast(agentId, {
         type:       'broadcast',
         thread_id,
         sender_agent_id: agentId,
@@ -96,15 +116,23 @@ wss.on('connection', (ws, req) => {
         ts:         typeof ts === 'number' ? ts : Date.now(),
         message_id: message_id ?? undefined,
       });
-      console.log(`[relay] speak agent_id=${agentId} thread_id=${thread_id} broadcast_to=${others} peers`);
+      console.log(`[relay] speak done agent_id=${agentId} sent_to=${sent} peers`);
+    } else {
+      console.log(`[relay] unknown type=${type} agent_id=${agentId}`);
     }
   });
 
   ws.on('close', () => {
     if (agentId) {
       connections.delete(agentId);
-      console.log(`[relay] closed agent_id=${agentId} total_connections=${connections.size}`);
+      console.log(`[relay] closed agent_id=${agentId} total=${connections.size} remaining=[${connectionIds().join(', ')}]`);
+    } else {
+      console.log(`[relay] connection closed before register remote=${remote}`);
     }
+  });
+
+  ws.on('error', (err) => {
+    console.log(`[relay] ws error agent_id=${agentId ?? 'unregistered'} error=${String(err?.message ?? err)}`);
   });
 });
 

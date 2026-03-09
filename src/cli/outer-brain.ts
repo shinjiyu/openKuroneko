@@ -57,8 +57,7 @@ program
   .option('--feishu-encrypt-key <key>', '飞书 HTTP Webhook 消息加密 Key（可选）')
   .option('--feishu-mode <mode>', '飞书接入模式：webhook（需公网，默认）| websocket（长连接，推荐）')
   .option('--feishu-port <port>', '飞书 Webhook 监听端口（默认 8090，仅 webhook 模式）')
-  .option('--feishu-agent-open-id <id>', '本机（机器人）在本应用下的 open_id，用于过滤自身消息与 @ 判定')
-  .option('--feishu-agent-union-id <id>', '本机（机器人）的 union_id，用于 @ 判定（多 agent 时配置，与 open_id 可同时配置）')
+  .option('--feishu-agent-union-id <id>', '本机（机器人）的 union_id，用于过滤自身消息与 @ 判定（必配）')
   .option('--relay-url <url>', '消息中转服务器 WebSocket URL（如 ws://localhost:9090），与 relay-key、relay-agent-id 同配则启用')
   .option('--relay-key <key>', '消息中转鉴权 key，与服务器 RELAY_KEY 一致')
   .option('--relay-agent-id <id>', '本 agent 在中转上的标识（如 kuroneko）')
@@ -97,7 +96,6 @@ const opts = program.opts<{
   feishuEncryptKey?:    string;
   feishuMode?:          string;
   feishuPort?:          string;
-  feishuAgentOpenId?:   string;
   feishuAgentUnionId?:  string;
   relayUrl?:            string;
   relayKey?:            string;
@@ -230,21 +228,21 @@ async function main() {
   const relayAgentId = opts.relayAgentId ?? process.env['RELAY_AGENT_ID'];
   const relayIngestRef: RelayIngestRef = { current: null };
 
-  if (opts.feishuAppId && opts.feishuAppSecret) {
-    if (relayUrl && relayKey && relayAgentId) {
-      console.log(`[relay] 配置已加载 url=${relayUrl} agent=${relayAgentId}`);
-    } else {
-      console.log('[relay] 未启用（需在 .env 或命令行设置 RELAY_URL、RELAY_KEY、RELAY_AGENT_ID）');
-    }
-  }
-
   // websocket 模式无需 verifyToken（仅 webhook 模式需要）
-  const feishuAgentOpenId = opts.feishuAgentOpenId?.trim()
-    || process.env['FEISHU_AGENT_OPEN_ID']?.trim()
-    || undefined;
   const feishuAgentUnionId = opts.feishuAgentUnionId?.trim()
     || process.env['FEISHU_AGENT_UNION_ID']?.trim()
     || undefined;
+
+  // 中转注册 id：优先用飞书 union_id（多实例同一应用同一 id，不同应用不同 id），否则用 RELAY_AGENT_ID
+  const relayRegisterId = (feishuAgentUnionId || relayAgentId)?.trim() || undefined;
+
+  if (opts.feishuAppId && opts.feishuAppSecret) {
+    if (relayUrl && relayKey && relayRegisterId) {
+      console.log(`[relay] 配置已加载 url=${relayUrl} agent=${relayRegisterId}${feishuAgentUnionId ? ' (union_id)' : ''}`);
+    } else if (relayUrl || relayKey) {
+      console.log('[relay] 未启用（需设置 RELAY_URL、RELAY_KEY，以及 FEISHU_AGENT_UNION_ID 或 RELAY_AGENT_ID）');
+    }
+  }
 
   let feishuOpenIdMap: FeishuOpenIdMap | null = null;
   if (opts.feishuAppId && opts.feishuAppSecret && (opts.feishuVerifyToken || opts.feishuMode === 'websocket')) {
@@ -256,7 +254,6 @@ async function main() {
       ...(opts.feishuEncryptKey  ? { encryptKey:  opts.feishuEncryptKey  } : {}),
       mode:         (opts.feishuMode as 'webhook' | 'websocket' | undefined) ?? 'webhook',
       webhookPort:  opts.feishuPort ? parseInt(opts.feishuPort, 10) : 8090,
-      agentOpenId:  feishuAgentOpenId,
       agentUnionId: feishuAgentUnionId,
       onFeishuIdsSeen: (entries) => feishuOpenIdMap?.merge(entries),
       getOpenIdForUnionId: (uid) => feishuOpenIdMap?.getOpenIdForUnionId(uid) ?? null,
@@ -267,13 +264,13 @@ async function main() {
         }
         return rawId;
       },
-      ...(relayUrl && relayKey && relayAgentId
-        ? { relayUrl, relayKey, relayAgentId, relayIngestRef, relayLogger: logger }
+      ...(relayUrl && relayKey && relayRegisterId
+        ? { relayUrl, relayKey, relayAgentId: relayRegisterId, relayIngestRef, relayLogger: logger }
         : {}),
     }));
     logger.info('cli', {
       event: 'channel.registered',
-      data:  { channel: 'feishu', relay: !!(relayUrl && relayKey && relayAgentId) },
+      data:  { channel: 'feishu', relay: !!(relayUrl && relayKey && relayRegisterId) },
     });
   }
 

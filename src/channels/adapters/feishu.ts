@@ -38,8 +38,7 @@
  *   encryptKey     HTTP 模式的消息加密 Key（可选）
  *   mode           'webhook'（默认）| 'websocket'
  *   webhookPort    HTTP 模式监听端口（默认 8090）
- *   agentOpenId    本机（机器人）的 open_id，用于过滤自身消息（事件里 sender 为 open_id）
- *   agentUnionId   本机（机器人）的 union_id，用于 @ 识别（与 mentions 的 union_id 匹配）；内部主 id 为 union_id 时推荐配置
+ *   agentUnionId   本机（机器人）的 union_id，用于过滤自身消息与 @ 判定（与 sender/mentions 的 union_id 匹配）；必配
  *   onFeishuIdsSeen  收到事件时写入 open_id ↔ union_id 映射（用于 getOpenIdForUnionId）
  *   getOpenIdForUnionId  union_id → 本应用 open_id，发私信 API 时使用
  *   resolveUserFn  open_id → 内部 user_id 的映射函数
@@ -71,9 +70,7 @@ export interface FeishuAdapterOptions {
   /** 'webhook'（HTTP 回调，需公网）| 'websocket'（长连接，推荐） */
   mode?:         'webhook' | 'websocket';
   webhookPort?:  number | undefined;
-  /** 本机（机器人）在本应用下的 open_id，用于过滤自身消息与 @ 判定 */
-  agentOpenId?:    string | undefined;
-  /** 本机（机器人）的 union_id，用于 @ 判定（多 agent 时配置此项，与 agentOpenId 二选一或同时配置） */
+  /** 本机（机器人）的 union_id，用于过滤自身消息与 @ 判定（必配） */
   agentUnionId?:  string | undefined;
   resolveUserFn: (rawUserId: string, channelId: string) => string | null;
   /** 用 union_id 查本应用下 open_id（DM 发消息时需将 thread 的 union_id 解析为 open_id） */
@@ -125,7 +122,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
   private server:            import('node:http').Server | null = null;
   private tenantAccessToken: string | null = null;
   private tokenExpireAt      = 0;
-  /** 启动时预取的 bot open_id（未配置 agentOpenId 时用于过滤自身消息） */
+  /** 启动时预取的 bot open_id（sender 无 union_id 时用于过滤自身消息，以及 @ 的 open_id 匹配） */
   private _botOpenId: string | null = null;
   /** 中转 WebSocket（可选） */
   private relayWs: WebSocket | null = null;
@@ -430,7 +427,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     // 保存 client 引用供 send() 使用
     this._sdkClient = client;
 
-    // 参考 OpenClaw：启动时尝试预取 bot open_id，用于 @ 判断（失败则仅用 app_id 匹配，无需用户配置）
+    // 启动时预取 bot open_id，用于无 union_id 时的自身过滤与 @ 的 open_id 匹配
     await this.prefetchBotOpenId();
 
     wsClient.start({ eventDispatcher: dispatcher });
@@ -452,7 +449,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       const openId = data?.app?.open_id;
       if (openId) {
         this._botOpenId = openId;
-        console.info('[feishu] bot open_id prefetched for @-mention detection');
+        console.info('[feishu] bot open_id prefetched (self-filter fallback and @-mention)');
       }
     } catch {
       // 忽略：无 open_id 时用 app_id 参与匹配即可
@@ -503,9 +500,11 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     const senderOpenId = sender.sender_id.open_id;
     const senderUnionId = (sender.sender_id as { union_id?: string }).union_id?.trim();
 
-    // 过滤本 bot 自身发出的消息（用 open_id 判断，事件里 sender 始终是 open_id）
-    const selfOpenIds = [this.opts.agentOpenId, this._botOpenId].filter(Boolean) as string[];
-    if (selfOpenIds.includes(senderOpenId)) return null;
+    // 过滤本 bot 自身发出的消息：优先 union_id，无 union_id 时用预取的 _botOpenId
+    const isSelf =
+      (this.opts.agentUnionId && senderUnionId === this.opts.agentUnionId.trim()) ||
+      (this._botOpenId !== null && senderOpenId === this._botOpenId);
+    if (isSelf) return null;
 
     // 从事件中抽取 open_id / union_id / name，写入映射表（内部以 union_id 为主 id 时需维护 union_id↔open_id）
     const getIdParts = (id: unknown): { openId: string; unionId?: string } => {
@@ -552,8 +551,8 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       return typeof m.id === 'string' ? m.id : '';
     });
 
-    // Agent 自我识别：支持 open_id 或 union_id（你配置 agentUnionId 后按 union_id 匹配）
-    const botOpenId = (this.opts.agentOpenId ?? this._botOpenId)?.trim() ?? '';
+    // Agent 自我识别：union_id 配置 + 预取 open_id（mentions 可能只带其一）
+    const botOpenId = this._botOpenId?.trim() ?? '';
     const botUnionId = this.opts.agentUnionId?.trim() ?? '';
     const mentionOpenIds = rawMentions.map((m) => getIdParts(m.id).openId);
     const mentionUnionIds = rawMentions.map((m) => getIdParts(m.id).unionId).filter(Boolean) as string[];

@@ -40,7 +40,7 @@
 
 - `OPENAI_API_KEY`（或项目所用 LLM 配置）
 - `FEISHU=1`、`FEISHU_APP_ID`、`FEISHU_APP_SECRET`（飞书）
-- `RELAY_KEY`、`RELAY_URL=ws://127.0.0.1:9090`、`RELAY_AGENT_ID=kuroneko`（若用中转）
+- `RELAY_KEY`、`RELAY_URL=ws://127.0.0.1:9090`；relay 注册 id 优先用 `FEISHU_AGENT_UNION_ID`，否则用 `RELAY_AGENT_ID`（若用中转）
 
 relay 服务单独配置：`/opt/kuroneko/relay/.env` 或 `RELAY_KEY=xxx PORT=9090`。
 

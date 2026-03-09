@@ -44,7 +44,6 @@ FEISHU_MODE="${FEISHU_MODE:-websocket}"   # websocket（推荐，无需公网）
 FEISHU_VERIFY_TOKEN="${FEISHU_VERIFY_TOKEN:-}"   # webhook 模式必填
 FEISHU_ENCRYPT_KEY="${FEISHU_ENCRYPT_KEY:-}"     # webhook 模式可选
 FEISHU_PORT="${FEISHU_PORT:-8090}"               # webhook 模式端口
-FEISHU_AGENT_OPEN_ID="${FEISHU_AGENT_OPEN_ID:-}"
 FEISHU_AGENT_UNION_ID="${FEISHU_AGENT_UNION_ID:-}"
 
 # ── 消息中转（多 agent 群聊上下文同步）──────────────────────────────────────
@@ -99,8 +98,7 @@ if [ -n "${FEISHU}" ] && [ -n "${FEISHU_APP_ID}" ]; then
     [ -n "${FEISHU_ENCRYPT_KEY}"  ] && OB_ARGS+=(--feishu-encrypt-key  "${FEISHU_ENCRYPT_KEY}")
     OB_ARGS+=(--feishu-port "${FEISHU_PORT}")
   fi
-  [ -n "${FEISHU_AGENT_OPEN_ID}" ]   && OB_ARGS+=(--feishu-agent-open-id   "${FEISHU_AGENT_OPEN_ID}")
-  [ -n "${FEISHU_AGENT_UNION_ID}" ] && OB_ARGS+=(--feishu-agent-union-id  "${FEISHU_AGENT_UNION_ID}")
+  [ -n "${FEISHU_AGENT_UNION_ID}" ] && OB_ARGS+=(--feishu-agent-union-id "${FEISHU_AGENT_UNION_ID}")
 fi
 
 if [ -n "${DINGTALK}" ] && [ -n "${DINGTALK_CLIENT_ID}" ]; then
@@ -110,15 +108,13 @@ if [ -n "${DINGTALK}" ] && [ -n "${DINGTALK_CLIENT_ID}" ]; then
   )
 fi
 
-if [ -n "${RELAY_URL}" ] && [ -n "${RELAY_KEY}" ] && [ -n "${RELAY_AGENT_ID}" ]; then
-  OB_ARGS+=(
-    --relay-url     "${RELAY_URL}"
-    --relay-key     "${RELAY_KEY}"
-    --relay-agent-id "${RELAY_AGENT_ID}"
-  )
-  echo "[relay] 已从环境加载 RELAY_URL=${RELAY_URL} RELAY_AGENT_ID=${RELAY_AGENT_ID}"
+# 中转：RELAY_URL、RELAY_KEY 必填；注册 id 优先用 FEISHU_AGENT_UNION_ID，否则 RELAY_AGENT_ID
+if [ -n "${RELAY_URL}" ] && [ -n "${RELAY_KEY}" ] && { [ -n "${FEISHU_AGENT_UNION_ID}" ] || [ -n "${RELAY_AGENT_ID}" ]; }; then
+  OB_ARGS+=( --relay-url "${RELAY_URL}" --relay-key "${RELAY_KEY}" )
+  [ -n "${RELAY_AGENT_ID}" ] && OB_ARGS+=( --relay-agent-id "${RELAY_AGENT_ID}" )
+  echo "[relay] 已从环境加载 RELAY_URL=${RELAY_URL} agent=${FEISHU_AGENT_UNION_ID:-${RELAY_AGENT_ID}}"
 else
-  echo "[relay] 未配置（设置 RELAY_URL、RELAY_KEY、RELAY_AGENT_ID 后启用）"
+  [ -n "${RELAY_URL}" ] || [ -n "${RELAY_KEY}" ] && echo "[relay] 未配置（需 RELAY_URL、RELAY_KEY，以及 FEISHU_AGENT_UNION_ID 或 RELAY_AGENT_ID）"
 fi
 
 # ── 启动前提示 ────────────────────────────────────────────────────────────────
@@ -131,7 +127,7 @@ echo " 内脑命令 : ${INNER_CMD}"
 [ -n "${WEBCHAT_PORT}" ] && echo " WebChat  : http://localhost:${WEBCHAT_PORT}"
 [ -n "${FEISHU}"       ] && echo " 飞书     : ${FEISHU_MODE} 模式"
 [ -n "${DINGTALK}"     ] && echo " 钉钉     : Stream 模式（App: ${DINGTALK_CLIENT_ID}）"
-[ -n "${RELAY_URL}"    ] && echo " 消息中转 : ${RELAY_URL} (agent: ${RELAY_AGENT_ID})"
+[ -n "${RELAY_URL}" ] && [ -n "${RELAY_KEY}" ] && { [ -n "${FEISHU_AGENT_UNION_ID}" ] || [ -n "${RELAY_AGENT_ID}" ]; } && echo " 消息中转 : ${RELAY_URL} (agent: ${FEISHU_AGENT_UNION_ID:-${RELAY_AGENT_ID}})"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo " 内脑在收到第一个任务目标时自动启动，无任务时不运行。"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
