@@ -25,19 +25,26 @@ export function createSetGoalTool(
       },
       origin_user: {
         type: 'string',
-        description: '下达此目标的用户 user_id（用于 BLOCK 通知路由）',
+        description: '下达此目标的用户 user_id（用于 BLOCK/COMPLETE 通知路由）',
         required: true,
+      },
+      origin_thread: {
+        type: 'string',
+        description:
+          '下达任务时所在的 thread_id（如 "feishu:group:xxx" 或 "dingtalk:group:yyy"）。' +
+          '当用户在群聊中派发任务时必须填写，用于在找不到私信时将通知发回原群。',
       },
     },
     async call(args): Promise<{ ok: boolean; output: string }> {
-      const goal       = String(args['goal'] ?? '');
-      const originUser = String(args['origin_user'] ?? '');
+      const goal         = String(args['goal'] ?? '');
+      const originUser   = String(args['origin_user'] ?? '');
+      const originThread = args['origin_thread'] ? String(args['origin_thread']) : undefined;
 
       if (!goal) return { ok: false, output: 'goal 不能为空' };
 
       let instanceId: string;
       try {
-        instanceId = pool.launch(goal, originUser);
+        instanceId = pool.launch(goal, originUser, originThread);
       } catch (err) {
         return { ok: false, output: String(err instanceof Error ? err.message : err) };
       }

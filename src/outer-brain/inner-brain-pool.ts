@@ -29,17 +29,19 @@ import { deriveAgentId, globalTmpDir } from '../identity/index.js';
 export type InstanceStatus = 'RUNNING' | 'EXITED';
 
 export interface InstanceRecord {
-  id:          string;
-  workDir:     string;
-  tempDir:     string;
-  goal:        string;
-  originUser:  string;
-  status:      InstanceStatus;
-  pid:         number | null;
-  startedAt:   Date;
-  exitCode:    number | null;
-  exitSignal:  string | null;
-  exitedAt:    Date | null;
+  id:            string;
+  workDir:       string;
+  tempDir:       string;
+  goal:          string;
+  originUser:    string;
+  /** 下达任务时所在的 thread_id（群聊时用于 COMPLETE/BLOCK 回落通知） */
+  originThread?: string;
+  status:        InstanceStatus;
+  pid:           number | null;
+  startedAt:     Date;
+  exitCode:      number | null;
+  exitSignal:    string | null;
+  exitedAt:      Date | null;
 }
 
 export interface InnerBrainPoolOptions {
@@ -79,7 +81,7 @@ export class InnerBrainPool {
   // ── 公开接口 ──────────────────────────────────────────────────────────────
 
   /** 启动新内脑实例，返回 instanceId。如超并发上限则抛出错误。 */
-  launch(goal: string, originUser: string): string {
+  launch(goal: string, originUser: string, originThread?: string): string {
     const running = this.runningInstances();
     if (running.length >= this.maxConcurrent) {
       throw new Error(
@@ -97,7 +99,8 @@ export class InnerBrainPool {
 
     // 写入初始目标到 input 文件
     const inputFile  = path.join(tempDir, 'input');
-    const message    = `[NEW_GOAL]\norigin_user: ${originUser}\n\n${goal}`;
+    const threadLine = originThread ? `origin_thread: ${originThread}\n` : '';
+    const message    = `[NEW_GOAL]\norigin_user: ${originUser}\n${threadLine}\n${goal}`;
     fs.writeFileSync(inputFile, message + '\n', 'utf8');
     // offset 从 0 开始（新实例，新文件）
     fs.writeFileSync(path.join(tempDir, 'input.offset'), '0', 'utf8');
@@ -123,6 +126,7 @@ export class InnerBrainPool {
       tempDir,
       goal,
       originUser,
+      ...(originThread ? { originThread } : {}),
       status:    'RUNNING',
       pid:       null,
       startedAt: new Date(),

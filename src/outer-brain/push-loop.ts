@@ -147,7 +147,8 @@ export class PushLoop {
   ): Promise<void> {
     const { escalationMgr, logger } = this.opts;
 
-    const targetUser = output.target_user ?? this.getGoalOriginUser(tempDir) ?? originUser;
+    const targetUser   = output.target_user ?? this.getGoalOriginUser(tempDir) ?? originUser;
+    const originThread = this.getGoalOriginThread(tempDir);
     if (!targetUser) {
       logger.warn('push-loop', { event: 'block.no_target', data: { instanceId, reason: output.message } });
       return;
@@ -156,7 +157,7 @@ export class PushLoop {
     const blockId = randomBytes(4).toString('hex');
     logger.info('push-loop', {
       event: 'block.start_escalation',
-      data: { instanceId, block_id: blockId, target_user: targetUser },
+      data: { instanceId, block_id: blockId, target_user: targetUser, origin_thread: originThread },
     });
 
     void (async () => {
@@ -165,6 +166,7 @@ export class PushLoop {
         reason:      output.message,
         question:    output.question ?? output.message,
         target_user: targetUser,
+        ...(originThread ? { origin_thread: originThread } : {}),
       });
 
       const directivesFile = path.join(tempDir, 'directives');
@@ -190,17 +192,18 @@ export class PushLoop {
     originUser: string,
   ): Promise<void> {
     const { logger } = this.opts;
-    const targetUser = output.target_user ?? originUser;
+    const targetUser   = output.target_user ?? originUser;
+    const originThread = this.getGoalOriginThread(workDir);
     if (!targetUser) {
       logger.warn('push-loop', { event: 'complete.no_target', data: {} });
       return;
     }
 
-    const threadId = this.getBestThreadId(targetUser);
+    const threadId = this.getBestThreadId(targetUser, originThread);
     if (!threadId) {
       logger.warn('push-loop', {
         event: 'complete.no_thread',
-        data: { target_user: targetUser, reason: 'UserStore 和 ThreadStore 均无该用户的 DM thread' },
+        data: { target_user: targetUser, reason: 'UserStore、ThreadStore 和 origin_thread 均无有效目标' },
       });
       return;
     }
@@ -267,29 +270,53 @@ export class PushLoop {
     }
   }
 
-  private getBestThreadId(userId: string): string | null {
-    // 优先：UserStore 动态记录的最近活跃 channel（重启后可能为空）
+  /** 从 goal.md（存储在 input 文件同级临时目录）读取 origin_thread */
+  private getGoalOriginThread(tempDir: string): string | null {
+    try {
+      const inputFile = path.join(tempDir, 'input');
+      if (!fs.existsSync(inputFile)) return null;
+      const content = fs.readFileSync(inputFile, 'utf8');
+      const match   = content.match(/^origin_thread:\s*(\S+)/m);
+      return match ? (match[1] ?? null) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private getBestThreadId(userId: string, originThread?: string | null): string | null {
+    // 优先：UserStore 动态记录的最近活跃 channel（有 raw_id 才有效）
     const channels = this.opts.userStore.getChannelsByPriority(userId);
-    if (channels.length && channels[0]) {
+    if (channels.length && channels[0]?.raw_id) {
       const ch = channels[0];
       return `${ch.channel_id}:dm:${ch.raw_id}`;
     }
 
-    // Fallback：从 ThreadStore（持久化）找该用户的 DM thread
+    // Fallback 1：从 ThreadStore（持久化）找该用户的 DM thread
     const dmThreads = this.opts.threadStore.allThreads().filter(
       (t) => t.type === 'dm' && t.peer_id === userId,
     );
-    if (!dmThreads.length) return null;
+    if (dmThreads.length) {
+      dmThreads.sort((a, b) => (b.last_msg_at ?? 0) - (a.last_msg_at ?? 0));
+      const best = dmThreads[0];
+      if (best) {
+        this.opts.logger.info('push-loop', {
+          event: 'complete.thread_fallback_dm',
+          data: { target_user: userId, thread_id: best.thread_id },
+        });
+        return best.thread_id;
+      }
+    }
 
-    dmThreads.sort((a, b) => (b.last_msg_at ?? 0) - (a.last_msg_at ?? 0));
-    const best = dmThreads[0];
-    if (!best) return null;
+    // Fallback 2：回落到发起任务时的群聊 thread（群发任务场景）
+    if (originThread) {
+      this.opts.logger.info('push-loop', {
+        event: 'complete.thread_fallback_group',
+        data: { target_user: userId, thread_id: originThread },
+      });
+      return originThread;
+    }
 
-    this.opts.logger.info('push-loop', {
-      event: 'complete.thread_fallback',
-      data: { target_user: userId, thread_id: best.thread_id },
-    });
-    return best.thread_id;
+    return null;
   }
 
   // ── offset-based 增量读取（每实例独立 offset，持久化到磁盘）─────────────

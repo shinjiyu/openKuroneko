@@ -25,6 +25,8 @@ export interface BlockEvent {
   target_user: string;
   /** 用于调用回调时标识本次 BLOCK */
   block_id: string;
+  /** 发起任务时所在的 thread_id（群聊场景，用于找不到私信时回落） */
+  origin_thread?: string;
 }
 
 export interface BlockResolution {
@@ -145,18 +147,25 @@ export class BlockEscalationManager {
   private async escalateNext(state: EscalationState): Promise<void> {
     if (state.resolved) return;
 
-    const channels = this.userStore.getChannelsByPriority(state.blockEvent.target_user);
+    // 只保留有有效 raw_id 的 channel（过滤掉 raw_id 为 undefined 的无效条目）
+    const allChannels = this.userStore.getChannelsByPriority(state.blockEvent.target_user);
+    const channels    = allChannels.filter((ch) => !!ch.raw_id);
 
-    if (state.channelIndex >= channels.length) {
+    // 在有效 channel 列表末尾追加 origin_thread（群聊回落）
+    const originThread = state.blockEvent.origin_thread;
+    const threadCandidates: string[] = [
+      ...channels.map((ch) => `${ch.channel_id}:dm:${ch.raw_id}`),
+      ...(originThread ? [originThread] : []),
+    ];
+
+    if (state.channelIndex >= threadCandidates.length) {
       // 所有 channel 超时，通知 owner
       await this.notifyOwners(state);
       return;
     }
 
-    const ch = channels[state.channelIndex];
-    if (!ch) return;
-
-    const threadId = `${ch.channel_id}:dm:${ch.raw_id}`;
+    const threadId = threadCandidates[state.channelIndex];
+    if (!threadId) return;
     const notifyMsg =
       `【任务阻塞通知】\n` +
       `原因：${state.blockEvent.reason}\n\n` +
@@ -170,16 +179,15 @@ export class BlockEscalationManager {
       this.logger.info('block-escalation', {
         event: 'escalation.sent',
         data: {
-          block_id:   state.blockEvent.block_id,
-          channel_id: ch.channel_id,
-          thread_id:  threadId,
-          level:      state.channelIndex,
+          block_id:  state.blockEvent.block_id,
+          thread_id: threadId,
+          level:     state.channelIndex,
         },
       });
     } catch (e) {
       this.logger.warn('block-escalation', {
         event: 'escalation.send_fail',
-        data: { channel_id: ch.channel_id, error: String(e) },
+        data: { thread_id: threadId, error: String(e) },
       });
     }
 

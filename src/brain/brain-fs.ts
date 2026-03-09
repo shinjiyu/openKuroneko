@@ -124,6 +124,17 @@ export class BrainFS {
     return match ? (match[1] ?? null) : null;
   }
 
+  /**
+   * 读取发起当前目标时所在的 thread_id（群聊任务通知回落用）。
+   * 格式：goal.md 头部 "origin_thread: <thread_id>"。
+   * 未找到返回 null。
+   */
+  readGoalOriginThread(): string | null {
+    const goal = this.readGoal();
+    const match = goal.match(/^origin_thread:\s*(\S+)/m);
+    return match ? (match[1] ?? null) : null;
+  }
+
   readMilestones(): string       { return this.read('milestones.md'); }
   writeMilestones(c: string)     { this.write('milestones.md', c); }
 

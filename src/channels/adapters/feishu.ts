@@ -236,6 +236,15 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       'im.message.receive_v1': async (data: unknown) => {
         // SDK 已经解包好了事件，data 是 event body
         const body = { header: {}, event: data } as unknown as FeishuEventBody;
+
+        // WebSocket 模式下飞书 SDK 可能重复推送（重连/未 ack 重放），用 message_id 去重
+        const msgId = body.event?.message?.message_id;
+        if (msgId) {
+          if (this.seenEventIds.has(msgId)) return;
+          this.seenEventIds.add(msgId);
+          setTimeout(() => this.seenEventIds.delete(msgId), 120_000);
+        }
+
         try {
           const msg = await this.parseEvent(body);
           if (msg) await onMessage(msg);

@@ -210,12 +210,13 @@ async function main() {
   // 未知用户自动注册为 "feishu_<open_id>"，管理员可事后调用 linkChannel 关联到真实身份。
   let _feishuUserStore: import('../users/store.js').UserStore | null = null;
 
-  if (opts.feishuAppId && opts.feishuAppSecret && opts.feishuVerifyToken) {
+  // websocket 模式无需 verifyToken（仅 webhook 模式需要）
+  if (opts.feishuAppId && opts.feishuAppSecret && (opts.feishuVerifyToken || opts.feishuMode === 'websocket')) {
     adapters.push(new FeishuChannelAdapter({
       appId:        opts.feishuAppId,
       appSecret:    opts.feishuAppSecret,
-      verifyToken:  opts.feishuVerifyToken,
-      encryptKey:   opts.feishuEncryptKey,
+      ...(opts.feishuVerifyToken ? { verifyToken: opts.feishuVerifyToken } : {}),
+      ...(opts.feishuEncryptKey  ? { encryptKey:  opts.feishuEncryptKey  } : {}),
       mode:         (opts.feishuMode as 'webhook' | 'websocket' | undefined) ?? 'webhook',
       webhookPort:  opts.feishuPort ? parseInt(opts.feishuPort, 10) : 8090,
       agentOpenId:  opts.feishuAgentOpenId,
