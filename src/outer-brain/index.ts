@@ -168,6 +168,139 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
       })
     : null;
 
+  // ── 群聊参与延迟（1~5s 随机，新消息重置；超过 10 条不再重置，形成对话感）────────────────
+
+  const DELAY_MIN_MS = 1000;
+  const DELAY_MAX_MS = 5000;
+  const MAX_PENDING_BEFORE_NO_RESET = 10;
+
+  interface ParticipateDelayState {
+    timer: ReturnType<typeof setTimeout> | null;
+    queue: InboundMessage[];
+  }
+  const participateDelayByThread = new Map<string, ParticipateDelayState>();
+
+  function randomDelayMs(): number {
+    return DELAY_MIN_MS + Math.floor(Math.random() * (DELAY_MAX_MS - DELAY_MIN_MS + 1));
+  }
+
+  function getOrCreateDelayState(threadId: string): ParticipateDelayState {
+    let s = participateDelayByThread.get(threadId);
+    if (!s) {
+      s = { timer: null, queue: [] };
+      participateDelayByThread.set(threadId, s);
+    }
+    return s;
+  }
+
+  function scheduleParticipateFlush(threadId: string): void {
+    const state = getOrCreateDelayState(threadId);
+    if (state.timer) clearTimeout(state.timer);
+    const delayMs = randomDelayMs();
+    state.timer = setTimeout(() => {
+      state.timer = null;
+      flushParticipateQueue(threadId);
+    }, delayMs);
+    logger.info('outer-brain', {
+      event: 'participate.delay_scheduled',
+      data: { thread: threadId, delayMs, queueLen: state.queue.length },
+    });
+  }
+
+  function enqueueForParticipate(msg: InboundMessage): void {
+    threadStore.getOrCreate(msg);
+    const state = getOrCreateDelayState(msg.thread_id);
+    if (state.queue.length < MAX_PENDING_BEFORE_NO_RESET) {
+      state.queue.push(msg);
+      scheduleParticipateFlush(msg.thread_id);
+    } else {
+      state.queue[MAX_PENDING_BEFORE_NO_RESET - 1] = msg;
+      logger.info('outer-brain', {
+        event: 'participate.delay_no_reset',
+        data: { thread: msg.thread_id, reason: 'queue_full' },
+      });
+    }
+  }
+
+  async function flushParticipateQueue(threadId: string): Promise<void> {
+    const state = participateDelayByThread.get(threadId);
+    if (!state || state.queue.length === 0) return;
+    const queue = state.queue.slice();
+    state.queue = [];
+
+    const last = queue[queue.length - 1]!;
+    for (const m of queue) {
+      threadStore.getOrCreate(m);
+      threadStore.appendUser(m.thread_id, m.user_id, m.content, m.ts);
+    }
+
+    await runParticipateDecision(last, { alreadyAppended: true });
+  }
+
+  async function runParticipateDecision(
+    msg: InboundMessage,
+    opts?: { alreadyAppended?: boolean },
+  ): Promise<void> {
+    const currentSoul = soulLoader.get();
+    const innerStatus = getInnerStatus();
+    const innerStatusStr = innerStatus
+      ? `模式:${innerStatus.mode} 里程碑:${innerStatus.milestone?.title ?? '无'} blocked:${innerStatus.blocked}`
+      : '未知';
+
+    const recentHistory = threadStore.getHistory(msg.thread_id).slice(-10);
+    const recentText = recentHistory
+      .map((h) => `${h.role === 'user' ? (h.user_id ?? 'user') : 'agent'}: ${h.content}`)
+      .join('\n');
+
+    const shouldSpeak = await participationEngine.shouldSpeak(
+      msg,
+      recentText,
+      currentSoul,
+      innerStatusStr,
+    );
+
+    if (shouldSpeak) {
+      logger.info('outer-brain', {
+        event: 'group.proactive_speak',
+        data: { thread: msg.thread_id },
+      });
+      logger.info('outer-brain', {
+        event: 'conversation.start',
+        data: { thread: msg.thread_id, reason: 'proactive' },
+      });
+      participationEngine.recordSpeak(msg.thread_id);
+      await runConversation(msg, { skipAppendUser: opts?.alreadyAppended });
+    } else {
+      if (!opts?.alreadyAppended) {
+        threadStore.getOrCreate(msg);
+        threadStore.appendUser(msg.thread_id, msg.user_id, msg.content, msg.ts);
+      }
+      logger.info('outer-brain', {
+        event: 'group.skip',
+        data: { thread: msg.thread_id, reason: 'silent', preview: msg.content.slice(0, 60) },
+      });
+    }
+  }
+
+  // ── 消息去重（同一条消息不重复回复，避免飞书重试/双通道导致多次回复）────────────────
+
+  const PROCESSED_MSG_TTL_MS = 5 * 60 * 1000;
+  const processedMessageIds = new Set<string>();
+  function markProcessedAndDedupe(msgId: string): boolean {
+    if (processedMessageIds.has(msgId)) return true; // 已处理过，视为重复
+    processedMessageIds.add(msgId);
+    setTimeout(() => processedMessageIds.delete(msgId), PROCESSED_MSG_TTL_MS);
+    return false;
+  }
+
+  /** DM 空内容或仅占位符（[图片][表情] 等）不触发回复，只记入 thread */
+  function isDmContentEmptyOrPlaceholder(content: string): boolean {
+    const t = content.trim();
+    if (!t) return true;
+    const onlyPlaceholders = /^(\[图片\]|\[表情\]|\[语音\]|\[文件[^\]]*\])+$/;
+    return onlyPlaceholders.test(t);
+  }
+
   // ── 消息处理器（核心路由逻辑）────────────────────────────────────────────
 
   async function onInboundMessage(msg: InboundMessage): Promise<void> {
@@ -177,6 +310,7 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
         thread:  msg.thread_id,
         user:    msg.user_id,
         mention: msg.is_mention,
+        msg_id:  msg.id,
         preview: msg.content.slice(0, 80),
       },
     });
@@ -194,11 +328,36 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
     const isGroup = msg.thread_id.includes(':group:');
 
     if (!isGroup) {
+      if (markProcessedAndDedupe(msg.id)) {
+        logger.info('outer-brain', {
+          event: 'dm.skip',
+          data: { thread: msg.thread_id, reason: 'duplicate_msg_id', msg_id: msg.id },
+        });
+        return;
+      }
+      if (isDmContentEmptyOrPlaceholder(msg.content)) {
+        threadStore.getOrCreate(msg);
+        threadStore.appendUser(msg.thread_id, msg.user_id, msg.content, msg.ts);
+        logger.info('outer-brain', {
+          event: 'dm.skip',
+          data: { thread: msg.thread_id, reason: 'empty_or_placeholder', preview: msg.content.slice(0, 60) },
+        });
+        return;
+      }
       logger.info('outer-brain', {
         event: 'conversation.start',
         data: { thread: msg.thread_id, reason: 'dm' },
       });
       await runConversation(msg);
+      return;
+    }
+
+    // 群消息也做 message_id 去重，避免同一条群消息触发多次
+    if (markProcessedAndDedupe(msg.id)) {
+      logger.info('outer-brain', {
+        event: 'group.skip',
+        data: { thread: msg.thread_id, reason: 'duplicate_msg_id', msg_id: msg.id },
+      });
       return;
     }
 
@@ -233,50 +392,14 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
       return;
     }
 
-    // 非 @mention 群消息：参与决策
-    const currentSoul    = soulLoader.get();
-    const innerStatus    = getInnerStatus();
-    const innerStatusStr = innerStatus
-      ? `模式:${innerStatus.mode} 里程碑:${innerStatus.milestone?.title ?? '无'} blocked:${innerStatus.blocked}`
-      : '未知';
-
-    const recentHistory = threadStore.getHistory(msg.thread_id).slice(-10);
-    const recentText = recentHistory
-      .map((h) => `${h.role === 'user' ? (h.user_id ?? 'user') : 'agent'}: ${h.content}`)
-      .join('\n');
-
-    const shouldSpeak = await participationEngine.shouldSpeak(
-      msg,
-      recentText,
-      currentSoul,
-      innerStatusStr,
-    );
-
-    if (shouldSpeak) {
-      logger.info('outer-brain', {
-        event: 'group.proactive_speak',
-        data: { thread: msg.thread_id },
-      });
-      logger.info('outer-brain', {
-        event: 'conversation.start',
-        data: { thread: msg.thread_id, reason: 'proactive' },
-      });
-      participationEngine.recordSpeak(msg.thread_id);
-      await runConversation(msg);
-    } else {
-      threadStore.getOrCreate(msg);
-      threadStore.appendUser(msg.thread_id, msg.user_id, msg.content, msg.ts);
-      logger.info('outer-brain', {
-        event: 'group.skip',
-        data: { thread: msg.thread_id, reason: 'silent', preview: msg.content.slice(0, 60) },
-      });
-    }
+    // 非 @mention 群消息：先进入延迟队列，到期后再做参与决策（形成对话感，避免抢答）
+    enqueueForParticipate(msg);
   }
 
-  async function runConversation(msg: InboundMessage): Promise<void> {
+  async function runConversation(msg: InboundMessage, opts?: { skipAppendUser?: boolean }): Promise<void> {
     const currentSoul = soulLoader.get();
     try {
-      await conversationLoop.process(msg, currentSoul);
+      await conversationLoop.process(msg, currentSoul, opts);
     } catch (e) {
       logger.error('outer-brain', {
         event: 'loop.error',
@@ -304,6 +427,11 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
   }
 
   async function stop(): Promise<void> {
+    for (const state of participateDelayByThread.values()) {
+      if (state.timer) clearTimeout(state.timer);
+    }
+    participateDelayByThread.clear();
+    processedMessageIds.clear();
     pushLoop?.stop();
     escalationMgr.cancelAll();
     soulLoader.stop();

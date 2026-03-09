@@ -42,9 +42,9 @@ const DEFAULTS: SoulConfig = {
   persona: '专业、简洁、有温度的 AI 助手',
   language: 'zh-CN',
   participation: {
-    proactive_level: 2,
-    speak_cooldown_ms: 60_000,
-    max_proactive_per_5min: 3,
+    proactive_level: 3,
+    speak_cooldown_ms: 45_000,
+    max_proactive_per_5min: 6,
   },
   owner_users: [],
   system_prompt_extra: '',

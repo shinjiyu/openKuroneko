@@ -86,6 +86,23 @@ export class ParticipationEngine {
     const minLen = level >= 3 ? 2 : 3;
     if (msg.content.trim().length < minLen) return false;
 
+    // ── 规则兜底：明显叫大家/你们参与的句子（level>=3 时直接 SPEAK，避免 LLM 判 SILENT）────────────────
+    if (level >= 3) {
+      const t = msg.content.trim();
+      if (
+        /你们俩|你们俩先|大家.*(说|来|发表|介绍|商量|认识)|怎么都不说话|我让你们说话|都不说话了|都别不说话/.test(t) ||
+        /我们来讨论|每人说一下|各自发表|先互相认识/.test(t)
+      ) {
+        this.logger.info('participation', {
+          event: 'speak_decision',
+          data: { thread: msg.thread_id, decision: 'SPEAK', reason: 'rule_group_invite', preview: t.slice(0, 80) },
+        });
+        state.last_proactive_at = now;
+        state.proactive_count_5min++;
+        return true;
+      }
+    }
+
     // ── LLM 判断 ────────────────────────────────────────────────────────────
     // 优先使用快速模型（无 thinking），避免主力模型浪费 token 做二分类
 
@@ -170,9 +187,9 @@ ${msg.content}`;
       const result = await llm.chat(systemPrompt, [{ role: 'user', content: userPrompt }]);
       const decision = result.content.trim().toUpperCase().includes('SPEAK');
 
-      this.logger.debug('participation', {
+      this.logger.info('participation', {
         event: 'speak_decision',
-        data: { thread: msg.thread_id, decision: decision ? 'SPEAK' : 'SILENT', msg: msg.content.slice(0, 60) },
+        data: { thread: msg.thread_id, decision: decision ? 'SPEAK' : 'SILENT', preview: msg.content.slice(0, 80) },
       });
 
       return decision;

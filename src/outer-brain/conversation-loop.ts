@@ -57,13 +57,16 @@ export class ConversationLoop {
   /**
    * 处理一条入站消息，返回外脑的文字回复（已通过 reply_to_user 工具发送）。
    * 如果无需回复（群聊沉默决策），返回 null。
+   * @param opts.skipAppendUser 为 true 时不再写入 thread（由调用方已写入，避免重复）
    */
-  async process(msg: InboundMessage, soul: SoulConfig): Promise<string | null> {
+  async process(msg: InboundMessage, soul: SoulConfig, opts?: { skipAppendUser?: boolean }): Promise<string | null> {
     const { llm, threadStore, channelRegistry, logger, tools } = this.deps;
 
-    // 记录入站消息到 thread 历史
-    threadStore.getOrCreate(msg);
-    threadStore.appendUser(msg.thread_id, msg.user_id, msg.content, msg.ts);
+    // 记录入站消息到 thread 历史（除非调用方已写入）
+    if (!opts?.skipAppendUser) {
+      threadStore.getOrCreate(msg);
+      threadStore.appendUser(msg.thread_id, msg.user_id, msg.content, msg.ts);
+    }
 
     // 读取内脑状态（用于权限规则注入）
     const innerStatus = this.deps.getInnerStatus();
