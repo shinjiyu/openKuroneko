@@ -138,6 +138,7 @@ export function createRunner(ctx: RunnerContext, deps: RunnerDeps): Runner {
             toolResultMessages.push({
               role: 'tool',
               content: JSON.stringify({ ok: false, output: `Unknown tool: ${tc.name}` }),
+              tool_call_id: tc.id,
             });
             continue;
           }
@@ -157,6 +158,7 @@ export function createRunner(ctx: RunnerContext, deps: RunnerDeps): Runner {
           toolResultMessages.push({
             role: 'tool',
             content: JSON.stringify({ ok: toolResult.ok, output: toolResult.output }),
+            tool_call_id: tc.id,
           });
         }
 

@@ -30,11 +30,13 @@ export interface Message {
    * 含图片等富媒体时用 ContentBlock[]（OpenAI vision 格式）。
    */
   content: string | ContentBlock[];
+  /** 仅 role=tool 时必填，与 assistant tool_calls 的 id 对应（OpenAI/Kimi 要求） */
+  tool_call_id?: string;
 }
 
 export interface LLMResult {
   content: string;
-  toolCalls?: Array<{ name: string; args: Record<string, unknown> }>;
+  toolCalls?: Array<{ id: string; name: string; args: Record<string, unknown> }>;
 }
 
 export interface StreamChunk {

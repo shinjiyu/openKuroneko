@@ -18,7 +18,7 @@ interface OAIResponse {
 
 interface OAIStreamDelta {
   content?: string | null;
-  tool_calls?: Array<{ index: number; function: { name?: string; arguments?: string } }>;
+  tool_calls?: Array<{ index: number; id?: string; function: { name?: string; arguments?: string } }>;
 }
 
 interface OAIStreamChunk {
@@ -118,17 +118,23 @@ export function createOpenAIAdapter(options?: {
 
   /**
    * OpenAI 对 tool/assistant role 的 content 要求是 string | null；
-   * 只有 user role 允许 ContentBlock[]（视觉输入）。
-   * 此处规范化：非 user role 的 array content 强制合并为纯文本。
+   * role=tool 时必须带 tool_call_id，否则下一轮会报 tool_call_id is not found。
    */
   function normalizeMessages(messages: Message[]): object[] {
     return messages.map((m) => {
-      if (typeof m.content === 'string' || m.role === 'user') return m;
-      // tool / assistant role: flatten content blocks to text
-      const text = (m.content as import('./index.js').ContentBlock[])
-        .map((b) => (b.type === 'text' ? b.text : '[image]'))
-        .join('\n');
-      return { role: m.role, content: text };
+      let content: string;
+      if (typeof m.content === 'string') {
+        content = m.content;
+      } else if (m.role === 'user') {
+        return m;
+      } else {
+        content = (m.content as import('./index.js').ContentBlock[])
+          .map((b) => (b.type === 'text' ? b.text : '[image]'))
+          .join('\n');
+      }
+      const out: Record<string, unknown> = { role: m.role, content };
+      if (m.role === 'tool' && m.tool_call_id) out['tool_call_id'] = m.tool_call_id;
+      return out;
     });
   }
 
@@ -177,6 +183,7 @@ export function createOpenAIAdapter(options?: {
 
     const content = choice.message.content ?? '';
     const toolCalls = (choice.message.tool_calls ?? []).map((tc) => ({
+      id: tc.id ?? `call_${Math.random().toString(36).slice(2)}`,
       name: tc.function.name,
       args: JSON.parse(tc.function.arguments) as Record<string, unknown>,
     }));
@@ -206,8 +213,7 @@ export function createOpenAIAdapter(options?: {
     const decoder = new TextDecoder();
 
     let fullContent = '';
-    // Accumulate streamed tool call fragments
-    const toolCallAccum: Map<number, { name: string; args: string }> = new Map();
+    const toolCallAccum: Map<number, { id: string; name: string; args: string }> = new Map();
 
     let buf = '';
     // eslint-disable-next-line no-constant-condition
@@ -240,10 +246,10 @@ export function createOpenAIAdapter(options?: {
             onChunk({ delta: delta.content, done: false });
           }
 
-          // Accumulate tool call fragments
           if (delta.tool_calls) {
             for (const tc of delta.tool_calls) {
-              const existing = toolCallAccum.get(tc.index) ?? { name: '', args: '' };
+              const existing = toolCallAccum.get(tc.index) ?? { id: '', name: '', args: '' };
+              if (tc.id) existing.id = tc.id;
               existing.name += tc.function.name ?? '';
               existing.args += tc.function.arguments ?? '';
               toolCallAccum.set(tc.index, existing);
@@ -254,6 +260,7 @@ export function createOpenAIAdapter(options?: {
     }
 
     const toolCalls = [...toolCallAccum.values()].map((tc) => ({
+      id: tc.id || `call_${Math.random().toString(36).slice(2)}`,
       name: tc.name,
       args: (() => {
         try { return JSON.parse(tc.args) as Record<string, unknown>; }

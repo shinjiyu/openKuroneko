@@ -122,7 +122,7 @@ export class ConversationLoop {
 
           currentMessages = [
             ...currentMessages,
-            { role: 'tool', content: `[${tc.name}] ${output}` },
+            { role: 'tool', content: `[${tc.name}] ${output}`, tool_call_id: tc.id },
           ];
         }
         continue;

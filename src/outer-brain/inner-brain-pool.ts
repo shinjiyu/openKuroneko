@@ -257,12 +257,21 @@ export class InnerBrainPool {
    * 构建实例启动命令：在模板命令中替换 --dir 参数，或追加。
    */
   private buildCommand(workDir: string): string[] {
-    const template = [...this.opts.launchCommandTemplate];
-    const dirIdx   = template.indexOf('--dir');
+    let template = [...this.opts.launchCommandTemplate];
+    const dirIdx = template.indexOf('--dir');
     if (dirIdx >= 0 && dirIdx + 1 < template.length) {
       template[dirIdx + 1] = workDir;
     } else {
       template.push('--dir', workDir);
+    }
+    // Windows: spawn('npx', ...) 常报 ENOENT，改用 node_modules\.bin\tsx.cmd
+    if (process.platform === 'win32' && template[0] === 'npx' && template[1] === 'tsx' && template[2]) {
+      const scriptPath = template[2];
+      const projectRoot = path.dirname(path.dirname(path.dirname(scriptPath)));
+      const tsxCmd = path.join(projectRoot, 'node_modules', '.bin', 'tsx.cmd');
+      if (fs.existsSync(tsxCmd)) {
+        template = [tsxCmd, scriptPath, ...template.slice(3)];
+      }
     }
     return template;
   }

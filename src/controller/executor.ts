@@ -193,6 +193,7 @@ export async function runExecutor(
         toolResultMsgs.push({
           role: 'tool',
           content: JSON.stringify({ ok: false, output: `Unknown tool: ${tc.name}` }),
+          tool_call_id: tc.id,
         });
         continue;
       }
@@ -224,6 +225,7 @@ export async function runExecutor(
       toolResultMsgs.push({
         role: 'tool',
         content: JSON.stringify(compressedResult),
+        tool_call_id: tc.id,
       });
     }
 

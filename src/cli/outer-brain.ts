@@ -126,7 +126,10 @@ async function main() {
   const innerIdentity = resolveIdentity(innerDir);
   const innerTempDir  = innerIdentity.tempDir;
   const config = loadConfig(innerTempDir);
-  const llm    = createOpenAIAdapter(config.model ? { model: config.model } : {});
+  // 外脑主 LLM：关闭 thinking，仅内脑开启
+  const llm = createOpenAIAdapter(
+    config.model ? { model: config.model, extraBody: { enable_thinking: false } } : { extraBody: { enable_thinking: false } },
+  );
 
   // 快速模型
   const fastModelName = opts.fastModel ?? process.env['FAST_MODEL'];
