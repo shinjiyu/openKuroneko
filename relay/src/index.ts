@@ -62,6 +62,7 @@ wss.on('connection', (ws, req) => {
     if (type === 'register') {
       const { key, agent_id } = msg as { key?: string; agent_id?: string };
       if (key !== RELAY_KEY || !agent_id) {
+        console.log(`[relay] register rejected (invalid key or missing agent_id)`);
         ws.send(JSON.stringify({ type: 'error', message: 'invalid key or missing agent_id' }));
         ws.close();
         return;
@@ -69,6 +70,7 @@ wss.on('connection', (ws, req) => {
       agentId = agent_id;
       connections.set(agent_id, { agentId: agent_id, ws, registeredAt: Date.now() });
       ws.send(JSON.stringify({ type: 'registered', agent_id: agent_id }));
+      console.log(`[relay] registered agent_id=${agent_id} total_connections=${connections.size}`);
       return;
     }
 
@@ -85,6 +87,7 @@ wss.on('connection', (ws, req) => {
         message_id?: string;
       };
       if (!thread_id || content === undefined) return;
+      const others = connections.size - 1;
       broadcast(agentId, {
         type:       'broadcast',
         thread_id,
@@ -93,11 +96,15 @@ wss.on('connection', (ws, req) => {
         ts:         typeof ts === 'number' ? ts : Date.now(),
         message_id: message_id ?? undefined,
       });
+      console.log(`[relay] speak agent_id=${agentId} thread_id=${thread_id} broadcast_to=${others} peers`);
     }
   });
 
   ws.on('close', () => {
-    if (agentId) connections.delete(agentId);
+    if (agentId) {
+      connections.delete(agentId);
+      console.log(`[relay] closed agent_id=${agentId} total_connections=${connections.size}`);
+    }
   });
 });
 

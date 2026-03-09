@@ -114,6 +114,9 @@ if [ -n "${RELAY_URL}" ] && [ -n "${RELAY_KEY}" ] && [ -n "${RELAY_AGENT_ID}" ];
     --relay-key     "${RELAY_KEY}"
     --relay-agent-id "${RELAY_AGENT_ID}"
   )
+  echo "[relay] 已从环境加载 RELAY_URL=${RELAY_URL} RELAY_AGENT_ID=${RELAY_AGENT_ID}"
+else
+  echo "[relay] 未配置（设置 RELAY_URL、RELAY_KEY、RELAY_AGENT_ID 后启用）"
 fi
 
 # ── 启动前提示 ────────────────────────────────────────────────────────────────

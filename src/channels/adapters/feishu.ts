@@ -52,6 +52,7 @@
  */
 
 import WebSocket from 'ws';
+import type { Logger } from '../../../logger/index.js';
 import type { ChannelAdapter, InboundMessage, OutboundMessage, MessageAttachment } from '../types.js';
 
 /** 收到中转广播时插入群聊记录的回调（由外脑注入，current 在 ob 创建后赋值） */
@@ -74,6 +75,8 @@ export interface FeishuAdapterOptions {
   relayKey?:     string | undefined;
   relayAgentId?: string | undefined;
   relayIngestRef?: RelayIngestRef | undefined;
+  /** 可选，用于输出中转连接/注册/广播等日志 */
+  relayLogger?:   Logger | undefined;
 }
 
 // ── 飞书事件消息体 ────────────────────────────────────────────────────────────
@@ -122,6 +125,8 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       await this.startWebhook(onMessage);
     }
     if (this.opts.relayUrl && this.opts.relayKey && this.opts.relayAgentId) {
+      console.log(`[relay] 正在连接 ${this.opts.relayUrl} agent=${this.opts.relayAgentId}`);
+      this.opts.relayLogger?.info('feishu', { event: 'relay.connecting', data: { url: this.opts.relayUrl, agentId: this.opts.relayAgentId } });
       this.connectRelay();
     }
   }
@@ -186,6 +191,8 @@ export class FeishuChannelAdapter implements ChannelAdapter {
           content:    msg.content,
           ts:         Date.now(),
         }));
+        console.log(`[relay] 已上报群消息 speak thread=${msg.thread_id} preview=${msg.content.slice(0, 50)}...`);
+        this.opts.relayLogger?.debug('feishu', { event: 'relay.speak', data: { thread_id: msg.thread_id, preview: msg.content.slice(0, 60) } });
       } catch {
         // ignore
       }
@@ -213,7 +220,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
   }
 
   private connectRelay(): void {
-    const { relayUrl, relayKey, relayAgentId, relayIngestRef } = this.opts;
+    const { relayUrl, relayKey, relayAgentId, relayIngestRef, relayLogger } = this.opts;
     if (!relayUrl || !relayKey || !relayAgentId) return;
 
     const ws = new WebSocket(relayUrl);
@@ -225,17 +232,31 @@ export class FeishuChannelAdapter implements ChannelAdapter {
         this.relayReconnectTimer = null;
       }
       ws.send(JSON.stringify({ type: 'register', key: relayKey, agent_id: relayAgentId }));
+      console.log('[relay] 已发送 register，等待服务器确认');
+      relayLogger?.info('feishu', { event: 'relay.register_sent', data: { agentId: relayAgentId } });
     });
 
     ws.on('message', (raw: Buffer | string) => {
       try {
         const data = JSON.parse(typeof raw === 'string' ? raw : raw.toString('utf8')) as Record<string, unknown>;
+        if (data?.type === 'registered') {
+          console.log(`[relay] 已注册成功 agent_id=${data.agent_id ?? relayAgentId}`);
+          relayLogger?.info('feishu', { event: 'relay.registered', data: { agentId: data.agent_id ?? relayAgentId } });
+          return;
+        }
+        if (data?.type === 'error') {
+          console.log(`[relay] 服务器返回错误: ${String((data as { message?: string }).message ?? data)}`);
+          relayLogger?.warn('feishu', { event: 'relay.error', data: { message: data.message } });
+          return;
+        }
         if (data?.type === 'broadcast' && typeof data.thread_id === 'string' && typeof data.sender_agent_id === 'string') {
           const threadId = data.thread_id as string;
           const userId   = data.sender_agent_id as string;
           const content = typeof data.content === 'string' ? data.content : '';
           const ts      = typeof data.ts === 'number' ? data.ts : Date.now();
           relayIngestRef?.current?.(threadId, userId, content, ts);
+          console.log(`[relay] 收到广播 来自=${userId} thread=${threadId} preview=${content.slice(0, 40)}...`);
+          relayLogger?.debug('feishu', { event: 'relay.broadcast_ingest', data: { thread_id: threadId, sender: userId, preview: content.slice(0, 50) } });
         }
       } catch {
         // ignore malformed
@@ -244,12 +265,18 @@ export class FeishuChannelAdapter implements ChannelAdapter {
 
     ws.on('close', () => {
       this.relayWs = null;
+      console.log('[relay] 连接已断开，5s 后重连');
+      relayLogger?.info('feishu', { event: 'relay.closed', data: {} });
       if (!this.relayReconnectTimer && relayUrl && relayKey && relayAgentId) {
         this.relayReconnectTimer = setInterval(() => this.connectRelay(), 5000);
+        relayLogger?.info('feishu', { event: 'relay.reconnect_scheduled', data: { inMs: 5000 } });
       }
     });
 
-    ws.on('error', () => { /* reconnect on close */ });
+    ws.on('error', (err) => {
+      console.log(`[relay] WebSocket 错误: ${err?.message ?? err}`);
+      relayLogger?.warn('feishu', { event: 'relay.error', data: { error: String(err?.message ?? err) } });
+    });
   }
 
   // ── 模式 A：HTTP Webhook ─────────────────────────────────────────────────

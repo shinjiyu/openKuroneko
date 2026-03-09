@@ -224,6 +224,14 @@ async function main() {
   const relayAgentId = opts.relayAgentId ?? process.env['RELAY_AGENT_ID'];
   const relayIngestRef: RelayIngestRef = { current: null };
 
+  if (opts.feishuAppId && opts.feishuAppSecret) {
+    if (relayUrl && relayKey && relayAgentId) {
+      console.log(`[relay] 配置已加载 url=${relayUrl} agent=${relayAgentId}`);
+    } else {
+      console.log('[relay] 未启用（需在 .env 或命令行设置 RELAY_URL、RELAY_KEY、RELAY_AGENT_ID）');
+    }
+  }
+
   // websocket 模式无需 verifyToken（仅 webhook 模式需要）
   if (opts.feishuAppId && opts.feishuAppSecret && (opts.feishuVerifyToken || opts.feishuMode === 'websocket')) {
     adapters.push(new FeishuChannelAdapter({
@@ -242,7 +250,7 @@ async function main() {
         return rawId; // 启动瞬间的降级（不丢消息）
       },
       ...(relayUrl && relayKey && relayAgentId
-        ? { relayUrl, relayKey, relayAgentId, relayIngestRef }
+        ? { relayUrl, relayKey, relayAgentId, relayIngestRef, relayLogger: logger }
         : {}),
     }));
     logger.info('cli', {
