@@ -132,17 +132,20 @@ async function main() {
   const innerIdentity = resolveIdentity(innerDir);
   const innerTempDir  = innerIdentity.tempDir;
   const config = loadConfig(innerTempDir);
-  // 外脑主 LLM：关闭 thinking，仅内脑开启
+  // 外脑主 LLM：关闭 thinking。Kimi k2.5 用 thinking: { type: "disabled" }，否则 reasoning_content 会报错
+  const baseUrl = process.env['OPENAI_BASE_URL'] ?? '';
+  const noThinkingBody = baseUrl.includes('moonshot')
+    ? { thinking: { type: 'disabled' as const } }
+    : { enable_thinking: false };
   const llm = createOpenAIAdapter(
-    config.model ? { model: config.model, extraBody: { enable_thinking: false } } : { extraBody: { enable_thinking: false } },
+    config.model ? { model: config.model, extraBody: noThinkingBody } : { extraBody: noThinkingBody },
   );
 
-  // 快速模型
   const fastModelName = opts.fastModel ?? process.env['FAST_MODEL'];
   const fastLlm = fastModelName
     ? createOpenAIAdapter({
         model:     fastModelName,
-        extraBody: { enable_thinking: false },
+        extraBody: baseUrl.includes('moonshot') ? { thinking: { type: 'disabled' as const } } : { enable_thinking: false },
       })
     : undefined;
 
@@ -233,6 +236,9 @@ async function main() {
   }
 
   // websocket 模式无需 verifyToken（仅 webhook 模式需要）
+  const feishuAgentOpenId = opts.feishuAgentOpenId?.trim()
+    || process.env['FEISHU_AGENT_OPEN_ID']?.trim()
+    || undefined;
   if (opts.feishuAppId && opts.feishuAppSecret && (opts.feishuVerifyToken || opts.feishuMode === 'websocket')) {
     adapters.push(new FeishuChannelAdapter({
       appId:        opts.feishuAppId,
@@ -241,7 +247,8 @@ async function main() {
       ...(opts.feishuEncryptKey  ? { encryptKey:  opts.feishuEncryptKey  } : {}),
       mode:         (opts.feishuMode as 'webhook' | 'websocket' | undefined) ?? 'webhook',
       webhookPort:  opts.feishuPort ? parseInt(opts.feishuPort, 10) : 8090,
-      agentOpenId:  opts.feishuAgentOpenId,
+      agentOpenId:  feishuAgentOpenId,
+      logger, // 群消息未识别为 @ 时会打 debug（mention.check），便于排查不回复
       resolveUserFn: (rawId, channelId) => {
         if (_feishuUserStore) {
           // 先查已有映射；未找到则自动注册（autoRegister=true）

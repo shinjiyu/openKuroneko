@@ -92,10 +92,15 @@ export class ConversationLoop {
       const result = await llm.chat(systemPrompt, currentMessages, toolDefs);
 
       if (result.toolCalls && result.toolCalls.length > 0) {
-        // 执行工具调用
+        // 执行工具调用；assistant 消息必须带 tool_calls（含 id），否则 API 报 tool_call_id is not found
         const assistantMsg: Message = {
           role: 'assistant',
           content: result.content || '',
+          tool_calls: result.toolCalls.map((tc) => ({
+            id: tc.id,
+            type: 'function' as const,
+            function: { name: tc.name, arguments: JSON.stringify(tc.args) },
+          })),
         };
         currentMessages = [...currentMessages, assistantMsg];
 
@@ -134,6 +139,10 @@ export class ConversationLoop {
     }
 
     if (finalReply) {
+      logger.info('outer-brain', {
+        event: 'loop.send',
+        data: { thread: msg.thread_id, content_len: finalReply.length, preview: finalReply.slice(0, 80) },
+      });
       // 发送回复到对应频道
       try {
         await channelRegistry.send({ thread_id: msg.thread_id, content: finalReply });

@@ -96,10 +96,22 @@ async function fetchWithRetry(
 
 // ── Adapter factory ───────────────────────────────────────────────────────────
 
+/**
+ * 工具调用在请求体中的线格式，不同模型要求不同：
+ * - openai: 要求 assistant 消息带 tool_calls（含 id），tool 消息带 tool_call_id（OpenAI/Kimi）
+ * - minimal: assistant 仅 content，tool 带 tool_call_id（GLM 等，与旧版行为一致）
+ */
+export type ToolWireFormat = 'openai' | 'minimal';
+
 export function createOpenAIAdapter(options?: {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  /**
+   * 工具调用的线格式。minimal=兼容 GLM（不往 assistant 写 tool_calls）；openai=OpenAI/Kimi 严格格式。
+   * 也可通过环境变量 OPENAI_TOOL_WIRE_FORMAT=openai|minimal 设置，默认 minimal 以保持 GLM 兼容。
+   */
+  toolWireFormat?: ToolWireFormat;
   /**
    * 附加到请求 body 的额外参数。
    * 例如 ZhipuAI 关闭思考：{ enable_thinking: false }
@@ -110,6 +122,13 @@ export function createOpenAIAdapter(options?: {
   const baseUrl = options?.baseUrl ?? process.env['OPENAI_BASE_URL'] ?? 'https://api.openai.com/v1';
   const model   = options?.model   ?? process.env['OPENAI_MODEL']    ?? 'gpt-4o';
   const extraBody = options?.extraBody ?? {};
+  const explicitWire = options?.toolWireFormat ?? (process.env['OPENAI_TOOL_WIRE_FORMAT'] as ToolWireFormat | undefined);
+  const toolWireFormat: ToolWireFormat =
+    explicitWire ??
+    (baseUrl.includes('moonshot') || baseUrl.includes('openai.com') ? 'openai' : 'minimal');
+  if (process.env['DEBUG_LLM'] === '1') {
+    console.warn('[DEBUG_LLM] adapter toolWireFormat=', toolWireFormat, 'baseUrl=', baseUrl);
+  }
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -117,22 +136,34 @@ export function createOpenAIAdapter(options?: {
   };
 
   /**
-   * OpenAI 对 tool/assistant role 的 content 要求是 string | null；
-   * role=tool 时必须带 tool_call_id，否则下一轮会报 tool_call_id is not found。
+   * 按 toolWireFormat 序列化消息：
+   * - openai: assistant 带 tool_calls，tool 带 tool_call_id（OpenAI/Kimi 要求）
+   * - minimal: assistant 仅 content（兼容 GLM），tool 仍带 tool_call_id
+   * 部分 API（如 Kimi）要求 assistant 有 tool_calls 时 content 为 null。
    */
   function normalizeMessages(messages: Message[]): object[] {
     return messages.map((m) => {
-      let content: string;
+      let content: string | null;
+      if (m.role === 'user') {
+        return m;
+      }
       if (typeof m.content === 'string') {
         content = m.content;
-      } else if (m.role === 'user') {
-        return m;
-      } else {
+      } else if (Array.isArray(m.content)) {
         content = (m.content as import('./index.js').ContentBlock[])
           .map((b) => (b.type === 'text' ? b.text : '[image]'))
           .join('\n');
+      } else {
+        content = '';
       }
       const out: Record<string, unknown> = { role: m.role, content };
+      if (m.role === 'assistant' && m.tool_calls?.length && toolWireFormat === 'openai') {
+        out['content'] = content || null;
+        out['tool_calls'] = m.tool_calls;
+        if (process.env['DEBUG_LLM'] === '1') {
+          console.warn('[DEBUG_LLM] sending assistant with tool_calls ids:', m.tool_calls.map((t) => t.id));
+        }
+      }
       if (m.role === 'tool' && m.tool_call_id) out['tool_call_id'] = m.tool_call_id;
       return out;
     });
@@ -156,6 +187,9 @@ export function createOpenAIAdapter(options?: {
     if (tools && tools.length > 0) {
       body['tools'] = tools;
       body['tool_choice'] = 'auto';
+    }
+    if (baseUrl.includes('moonshot') && body['thinking'] === undefined) {
+      body['thinking'] = { type: 'disabled' };
     }
     return JSON.stringify(body);
   }
@@ -181,12 +215,30 @@ export function createOpenAIAdapter(options?: {
     const choice = data.choices[0];
     if (!choice) throw new Error('No choices returned from OpenAI API');
 
+    const rawToolCalls = choice.message.tool_calls ?? [];
+    if (process.env['DEBUG_LLM'] === '1' && rawToolCalls.length > 0) {
+      console.warn('[DEBUG_LLM] response tool_calls:', JSON.stringify(rawToolCalls, null, 2));
+    }
+
     const content = choice.message.content ?? '';
-    const toolCalls = (choice.message.tool_calls ?? []).map((tc) => ({
-      id: tc.id ?? `call_${Math.random().toString(36).slice(2)}`,
-      name: tc.function.name,
-      args: JSON.parse(tc.function.arguments) as Record<string, unknown>,
-    }));
+    const toolCalls = rawToolCalls.map((tc, idx) => {
+      const rawId = tc.id?.trim();
+      const id = rawId || `call_${Math.random().toString(36).slice(2)}`;
+      if (!rawId && process.env['DEBUG_LLM'] === '1') {
+        console.warn('[DEBUG_LLM] tool_calls[' + idx + '] had no id from API, using fallback:', id);
+      }
+      return {
+        id,
+        name: tc.function.name,
+        args: (() => {
+          try {
+            return JSON.parse(tc.function.arguments) as Record<string, unknown>;
+          } catch {
+            return {} as Record<string, unknown>;
+          }
+        })(),
+      };
+    });
 
     return { content, toolCalls };
   }

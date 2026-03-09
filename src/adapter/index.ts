@@ -23,6 +23,13 @@ export interface ImageContentBlock {
 
 export type ContentBlock = TextContentBlock | ImageContentBlock;
 
+/** Assistant 消息中的单条 tool call（回传 API 时必带，否则 tool_call_id 无法匹配） */
+export interface ToolCallPart {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+}
+
 export interface Message {
   role: 'system' | 'user' | 'assistant' | 'tool';
   /**
@@ -32,6 +39,8 @@ export interface Message {
   content: string | ContentBlock[];
   /** 仅 role=tool 时必填，与 assistant tool_calls 的 id 对应（OpenAI/Kimi 要求） */
   tool_call_id?: string;
+  /** 仅 role=assistant 且本轮有工具调用时必填，与后续 tool 消息的 tool_call_id 对应 */
+  tool_calls?: ToolCallPart[];
 }
 
 export interface LLMResult {
@@ -62,4 +71,4 @@ export interface LLMAdapter {
   ): Promise<LLMResult>;
 }
 
-export { createOpenAIAdapter } from './openai.js';
+export { createOpenAIAdapter, type ToolWireFormat } from './openai.js';

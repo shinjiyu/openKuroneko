@@ -124,9 +124,17 @@ export function createRunner(ctx: RunnerContext, deps: RunnerDeps): Runner {
           break;
         }
 
-        // Execute each tool call and collect results
+        // Assistant 消息必须带 tool_calls（含 id），否则 API 报 tool_call_id is not found
         const toolResultMessages: Message[] = [
-          { role: 'assistant', content: lastContent },
+          {
+            role: 'assistant',
+            content: lastContent,
+            tool_calls: result.toolCalls!.map((tc) => ({
+              id: tc.id,
+              type: 'function' as const,
+              function: { name: tc.name, arguments: JSON.stringify(tc.args) },
+            })),
+          },
         ];
 
         for (const tc of result.toolCalls) {

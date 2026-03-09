@@ -24,7 +24,7 @@ Entry/CLI → Identity → Config/Soul → I/O Registry
 | Tools | `src/tools` | 10 种工具：read/write/edit_file, shell_exec, web_search, get_time, reply_to_user, run_agent, state, capability_gap |
 | Loop Scheduler | `src/loop` | once / interval / fast（防空转退避）三种模式 |
 | R-CCAM Runner | `src/runner` | Retrieval → Cognition → Action → Memory |
-| LLM Adapter | `src/adapter` | OpenAI Chat Completions（可替换） |
+| LLM Adapter | `src/adapter` | OpenAI 兼容接口；多模型通过 `OPENAI_TOOL_WIRE_FORMAT`（openai/minimal）区分工具调用格式 |
 | Logger | `src/logger` | 结构化 JSON Lines 日志，落 `<tempDir>/logs/YYYY-MM-DD.jsonl` |
 
 详细设计见 [`doc/`](./doc/) 目录。

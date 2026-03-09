@@ -5,11 +5,21 @@
  * 发消息时通过 send() 路由到正确频道。
  */
 
+import type { Logger } from '../logger/index.js';
 import type { ChannelAdapter, InboundMessage, OutboundMessage } from './types.js';
+
+export interface ChannelRegistryOptions {
+  logger?: Logger;
+}
 
 export class ChannelRegistry {
   private readonly adapters = new Map<string, ChannelAdapter>();
   private messageHandler: ((msg: InboundMessage) => Promise<void>) | null = null;
+  private readonly logger: Logger | undefined;
+
+  constructor(opts?: ChannelRegistryOptions) {
+    this.logger = opts?.logger;
+  }
 
   register(adapter: ChannelAdapter): void {
     if (this.adapters.has(adapter.channel_id)) {
@@ -45,6 +55,16 @@ export class ChannelRegistry {
     const adapter = this.adapters.get(channelId);
     if (!adapter) {
       throw new Error(`No adapter registered for channel: ${channelId} (thread: ${msg.thread_id})`);
+    }
+    if (this.logger) {
+      this.logger.info('channel', {
+        event: 'send',
+        data: {
+          channel_id:  channelId,
+          thread_id:    msg.thread_id,
+          content_len:  msg.content?.length ?? 0,
+        },
+      });
     }
     await adapter.send(msg);
   }

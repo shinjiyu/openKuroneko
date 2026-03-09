@@ -38,7 +38,7 @@
  *   encryptKey     HTTP 模式的消息加密 Key（可选）
  *   mode           'webhook'（默认）| 'websocket'
  *   webhookPort    HTTP 模式监听端口（默认 8090）
- *   agentOpenId    Bot 的 open_id（可选；不配时用 app_id 参与 @ 判断并尝试启动时预取 open_id，参考 OpenClaw）
+ *   agentOpenId    本机（机器人）的 open_id，用于 @ 判断与过滤自身消息；配置后按 open_id 与 mentions 匹配（推荐）
  *   resolveUserFn  open_id → 内部 user_id 的映射函数
  *   relayUrl       消息中转服务器 WebSocket URL（可选；与 relayKey、relayAgentId 一起配置则启用）
  *   relayKey       中转鉴权 key，与服务器 RELAY_KEY 一致
@@ -52,7 +52,7 @@
  */
 
 import WebSocket from 'ws';
-import type { Logger } from '../../../logger/index.js';
+import type { Logger } from '../../logger/index.js';
 import type { ChannelAdapter, InboundMessage, OutboundMessage, MessageAttachment } from '../types.js';
 
 /** 收到中转广播时插入群聊记录的回调（由外脑注入，current 在 ob 创建后赋值） */
@@ -77,12 +77,18 @@ export interface FeishuAdapterOptions {
   relayIngestRef?: RelayIngestRef | undefined;
   /** 可选，用于输出中转连接/注册/广播等日志 */
   relayLogger?:   Logger | undefined;
+  /** 可选：传入后打 inbound/send/mention.eval 日志，便于全链路排查 */
+  logger?:        {
+    info:  (module: string, payload: { event: string; data?: unknown }) => void;
+    debug: (module: string, payload: { event: string; data?: unknown }) => void;
+  };
 }
 
 // ── 飞书事件消息体 ────────────────────────────────────────────────────────────
 
 interface FeishuEventBody {
-  header: { event_id: string; event_type: string; create_time: string };
+  /** 事件头，HTTP 推送时含 app_id（当前应用），用于与 mentions 中的 id 比对 */
+  header: { event_id: string; event_type: string; create_time: string; app_id?: string };
   event: {
     message: {
       message_id:   string;
@@ -92,7 +98,8 @@ interface FeishuEventBody {
       content:      string;   // JSON string，结构随 message_type 变化
       create_time:  string;
       parent_id?:   string;
-      mentions?:    Array<{ id: { open_id: string; app_id?: string }; key: string; name: string }>;
+      /** 被 @ 的用户用 open_id 等标识，被 @ 的机器人用 app_id 标识（id 为 app_id 字符串或含 app_id 的对象） */
+      mentions?:    Array<{ id: string | { open_id?: string; app_id?: string }; key: string; name: string }>;
     };
     sender: { sender_id: { open_id: string }; sender_type: string };
   };
@@ -108,7 +115,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
   private server:            import('node:http').Server | null = null;
   private tenantAccessToken: string | null = null;
   private tokenExpireAt      = 0;
-  /** 启动时预取的 bot open_id（用于 @ 判断与过滤自身，无则用 app_id 参与匹配） */
+  /** 启动时预取的 bot open_id（未配置 agentOpenId 时用于过滤自身消息） */
   private _botOpenId: string | null = null;
   /** 中转 WebSocket（可选） */
   private relayWs: WebSocket | null = null;
@@ -180,6 +187,17 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     );
     if (!res.ok) {
       throw new Error(`[feishu] send failed: ${res.status} ${await res.text()}`);
+    }
+
+    if (this.opts.logger) {
+      this.opts.logger.info('feishu', {
+        event: 'send',
+        data: {
+          thread_id:   msg.thread_id,
+          content_len: msg.content?.length ?? 0,
+          preview:     (msg.content ?? '').slice(0, 60),
+        },
+      });
     }
 
     // 群消息发送成功后向中转上报，供其它 agent 插入群聊记录
@@ -437,18 +455,52 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     // 图片类附件：立刻下载并转为 base64 data URL，方便 LLM 多模态直接消费
     const attachments = await this.resolveAttachments(rawAttachments);
 
-    // @mention 解析：mentions 里包含本 bot 时才视为 @ 了自己（参考 OpenClaw，无需用户配置 open_id）
-    // 匹配方式：1) 配置的 agentOpenId 2) 启动时预取的 _botOpenId 3) app_id（飞书 @机器人 时可能为 id.open_id 或 id.app_id）
-    const mentions = (message.mentions ?? []).map(
-      (m) => this.opts.resolveUserFn(m.id.open_id, 'feishu') ?? m.id.open_id,
-    );
-    const botIds = [this.opts.agentOpenId, this._botOpenId, this.opts.appId].filter(Boolean) as string[];
-    const isMention = (message.mentions ?? []).some((m) => {
-      const id = m.id as { open_id: string; app_id?: string };
-      return botIds.includes(id.open_id) || (id.app_id && id.app_id === this.opts.appId);
+    // @mention 解析：用配置的 agentOpenId（或预取 _botOpenId）与 mentions[].id 的 open_id 匹配
+    const getMentionOpenId = (id: unknown): string => {
+      if (id == null) return '';
+      if (typeof id === 'string') return id.trim();
+      const o = id as Record<string, unknown>;
+      const v = o['open_id'];
+      return typeof v === 'string' ? v.trim() : '';
+    };
+    const rawMentions = message.mentions ?? [];
+    const mentions = rawMentions.map((m) => {
+      const openId = getMentionOpenId(m.id);
+      if (openId) return this.opts.resolveUserFn(openId, 'feishu') ?? openId;
+      return typeof m.id === 'string' ? m.id : '';
     });
 
+    const botOpenId = (this.opts.agentOpenId ?? this._botOpenId)?.trim() ?? '';
+    const mentionOpenIds = rawMentions.map((m) => getMentionOpenId(m.id));
+    const isMention = botOpenId !== '' && mentionOpenIds.some((oid) => oid === botOpenId);
+
+    if (isGroup && rawMentions.length > 0 && this.opts.logger) {
+      this.opts.logger.info('feishu', {
+        event: 'mention.eval',
+        data: {
+          thread_id:       threadId,
+          bot_open_id:     botOpenId || null,
+          mention_open_ids: mentionOpenIds,
+          is_mention:      isMention,
+          preview:         content.slice(0, 60),
+        },
+      });
+    }
+
     const cleanContent = content.replace(/@\S+/g, '').trim();
+
+    if (this.opts.logger) {
+      this.opts.logger.info('feishu', {
+        event: 'inbound',
+        data: {
+          message_id:   message.message_id,
+          thread_id:    threadId,
+          is_mention:   isMention,
+          has_mentions: rawMentions.length,
+          preview:      content.slice(0, 60),
+        },
+      });
+    }
 
     return {
       id:           message.message_id,

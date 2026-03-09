@@ -176,7 +176,15 @@ export async function runExecutor(
       break;
     }
 
-    const assistantMsg: Message = { role: 'assistant', content: lastContent };
+    const assistantMsg: Message = {
+      role: 'assistant',
+      content: lastContent,
+      tool_calls: result.toolCalls!.map((tc) => ({
+        id: tc.id,
+        type: 'function' as const,
+        function: { name: tc.name, arguments: JSON.stringify(tc.args) },
+      })),
+    };
     const toolResultMsgs: Message[] = [assistantMsg];
 
     for (const tc of result.toolCalls) {

@@ -86,7 +86,7 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
   const userStore   = new UserStore(obDir);
 
   // ── 频道注册表 ────────────────────────────────────────────────────────────
-  const channelRegistry = new ChannelRegistry();
+  const channelRegistry = new ChannelRegistry({ logger });
   for (const adapter of opts.extraAdapters ?? []) {
     channelRegistry.register(adapter);
   }
@@ -194,11 +194,19 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
     const isGroup = msg.thread_id.includes(':group:');
 
     if (!isGroup) {
+      logger.info('outer-brain', {
+        event: 'conversation.start',
+        data: { thread: msg.thread_id, reason: 'dm' },
+      });
       await runConversation(msg);
       return;
     }
 
     if (msg.is_mention) {
+      logger.info('outer-brain', {
+        event: 'conversation.start',
+        data: { thread: msg.thread_id, reason: 'mention' },
+      });
       await runConversation(msg);
       return;
     }
@@ -207,9 +215,9 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
     if (msg.mentions?.length) {
       threadStore.getOrCreate(msg);
       threadStore.appendUser(msg.thread_id, msg.user_id, msg.content, msg.ts);
-      logger.debug('outer-brain', {
-        event: 'group.mention_others',
-        data: { thread: msg.thread_id, mentions: msg.mentions },
+      logger.info('outer-brain', {
+        event: 'group.skip',
+        data: { thread: msg.thread_id, reason: 'mention_others', mentions: msg.mentions },
       });
       return;
     }
@@ -218,9 +226,9 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
     if (msg.sender_type === 'app') {
       threadStore.getOrCreate(msg);
       threadStore.appendUser(msg.thread_id, msg.user_id, msg.content, msg.ts);
-      logger.debug('outer-brain', {
-        event: 'group.other_bot_message',
-        data: { thread: msg.thread_id, user: msg.user_id, preview: msg.content.slice(0, 60) },
+      logger.info('outer-brain', {
+        event: 'group.skip',
+        data: { thread: msg.thread_id, reason: 'other_bot', user: msg.user_id },
       });
       return;
     }
@@ -249,14 +257,18 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
         event: 'group.proactive_speak',
         data: { thread: msg.thread_id },
       });
+      logger.info('outer-brain', {
+        event: 'conversation.start',
+        data: { thread: msg.thread_id, reason: 'proactive' },
+      });
       participationEngine.recordSpeak(msg.thread_id);
       await runConversation(msg);
     } else {
       threadStore.getOrCreate(msg);
       threadStore.appendUser(msg.thread_id, msg.user_id, msg.content, msg.ts);
-      logger.debug('outer-brain', {
-        event: 'group.silent',
-        data: { thread: msg.thread_id, msg: msg.content.slice(0, 60) },
+      logger.info('outer-brain', {
+        event: 'group.skip',
+        data: { thread: msg.thread_id, reason: 'silent', preview: msg.content.slice(0, 60) },
       });
     }
   }

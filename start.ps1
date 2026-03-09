@@ -33,6 +33,9 @@ $FEISHU_AGENT_OPEN_ID = $env:FEISHU_AGENT_OPEN_ID
 $DINGTALK   = $env:DINGTALK
 $DINGTALK_CLIENT_ID = $env:DINGTALK_CLIENT_ID
 $DINGTALK_CLIENT_SECRET = $env:DINGTALK_CLIENT_SECRET
+$RELAY_URL = $env:RELAY_URL
+$RELAY_KEY = $env:RELAY_KEY
+$RELAY_AGENT_ID = $env:RELAY_AGENT_ID
 $FAST_MODEL = $env:FAST_MODEL
 $ESCALATION_WAIT_MS = if ($env:ESCALATION_WAIT_MS) { $env:ESCALATION_WAIT_MS } else { "1800000" }
 
@@ -55,9 +58,13 @@ if (Test-Path $envPath) {
   $FEISHU_APP_ID = $env:FEISHU_APP_ID
   $FEISHU_APP_SECRET = $env:FEISHU_APP_SECRET
   $FEISHU_MODE  = $env:FEISHU_MODE
+  $FEISHU_AGENT_OPEN_ID = $env:FEISHU_AGENT_OPEN_ID
   $DINGTALK     = $env:DINGTALK
   $DINGTALK_CLIENT_ID = $env:DINGTALK_CLIENT_ID
   $DINGTALK_CLIENT_SECRET = $env:DINGTALK_CLIENT_SECRET
+  $RELAY_URL    = $env:RELAY_URL
+  $RELAY_KEY    = $env:RELAY_KEY
+  $RELAY_AGENT_ID = $env:RELAY_AGENT_ID
   $FAST_MODEL   = $env:FAST_MODEL
 }
 
@@ -82,6 +89,9 @@ if ($FEISHU -and $FEISHU_APP_ID) {
 if ($DINGTALK -and $DINGTALK_CLIENT_ID) {
   $OB_ARGS += "--dingtalk-client-id", $DINGTALK_CLIENT_ID, "--dingtalk-client-secret", $DINGTALK_CLIENT_SECRET
 }
+if ($RELAY_URL -and $RELAY_KEY -and $RELAY_AGENT_ID) {
+  $OB_ARGS += "--relay-url", $RELAY_URL, "--relay-key", $RELAY_KEY, "--relay-agent-id", $RELAY_AGENT_ID
+}
 
 Write-Host "------------------------------------------------------------------------"
 Write-Host " openKuroneko Outer Brain"
@@ -92,6 +102,7 @@ Write-Host " INNER_CMD: $INNER_CMD"
 if ($WEBCHAT_PORT) { Write-Host " WebChat  : http://localhost:$WEBCHAT_PORT" }
 if ($FEISHU)       { Write-Host " Feishu  : $FEISHU_MODE" }
 if ($DINGTALK)      { Write-Host " DingTalk: Stream (App: $DINGTALK_CLIENT_ID)" }
+if ($RELAY_URL)     { Write-Host " Relay   : $RELAY_URL (agent: $RELAY_AGENT_ID)" }
 Write-Host "------------------------------------------------------------------------"
 Write-Host " Inner brain starts on first set_goal, idle when no task."
 Write-Host "------------------------------------------------------------------------"
