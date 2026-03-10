@@ -340,11 +340,15 @@ async function main() {
   relayIngestRef.current = (threadId, userId, content, ts, ingestOpts) => {
     ob.threadStore.ensureThread(threadId, 'feishu', ts);
     if (ingestOpts?.sender_name) {
+      const channels: Array<{ channelId: string; rawId: string }> = [];
+      if (ingestOpts.sender_open_id?.trim()) channels.push({ channelId: 'feishu', rawId: ingestOpts.sender_open_id.trim() });
+      if (ingestOpts.sender_union_id?.trim() && !channels.some((c) => c.rawId === ingestOpts.sender_union_id))
+        channels.push({ channelId: 'feishu', rawId: ingestOpts.sender_union_id.trim() });
       ob.userStore.register({
         userId:      userId,
         displayName: ingestOpts.sender_name,
         role:        'member',
-        channels:    ingestOpts.sender_open_id ? [{ channelId: 'feishu', rawId: ingestOpts.sender_open_id }] : [],
+        channels:    channels.length ? channels : [{ channelId: 'feishu', rawId: userId }],
       });
     }
     if (feishuOpenIdMap && ingestOpts?.sender_open_id?.trim()) {
@@ -355,17 +359,25 @@ async function main() {
       if (ingestOpts.sender_name) entry.name = ingestOpts.sender_name;
       feishuOpenIdMap.merge([entry]);
     }
+    // 写入历史时使用与 userStore 一致的规范 user_id（feishu_on_xxx），避免同一人出现多种 id 导致人名映错
+    let canonicalUserId = userId;
+    if (ingestOpts?.sender_union_id?.trim() || ingestOpts?.sender_open_id?.trim()) {
+      const resolved =
+        ob.userStore.resolveUser(ingestOpts.sender_union_id ?? ingestOpts.sender_open_id ?? '', 'feishu', true) ??
+        ob.userStore.resolveUser(ingestOpts.sender_open_id ?? ingestOpts.sender_union_id ?? '', 'feishu', true);
+      if (resolved) canonicalUserId = resolved;
+    }
     const history = ob.threadStore.getHistory(threadId);
     const last = history[history.length - 1];
     const likelyDuplicate =
       last?.role === 'user' &&
-      last.user_id === userId &&
+      last.user_id === canonicalUserId &&
       last.content === content &&
       Math.abs((last.ts ?? 0) - ts) < 15_000;
     if (!likelyDuplicate) {
-      ob.threadStore.appendUser(threadId, userId, content, ts);
+      ob.threadStore.appendUser(threadId, canonicalUserId, content, ts);
     }
-    ob.onRelayMessageIngested(threadId, userId, content, ts, ingestOpts);
+    ob.onRelayMessageIngested(threadId, canonicalUserId, content, ts, ingestOpts);
   };
 
   // ── 信号处理 ──────────────────────────────────────────────────────────────

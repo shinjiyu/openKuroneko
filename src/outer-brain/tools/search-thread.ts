@@ -7,8 +7,20 @@
 
 import type { ObTool } from './types.js';
 import type { ThreadStore } from '../../threads/store.js';
+import type { UserStore } from '../../users/store.js';
 
-export function createSearchThreadTool(threadStore: ThreadStore): ObTool {
+function displayNameFor(userStore: UserStore, threadId: string, userId: string | undefined): string {
+  if (!userId) return 'user';
+  const u = userStore.getUser(userId);
+  if (u?.display_name) return u.display_name;
+  if (threadId.startsWith('feishu:') && (userId.startsWith('on_') || userId.startsWith('ou_'))) {
+    const c = userStore.getUser(`feishu_${userId}`);
+    if (c?.display_name) return c.display_name;
+  }
+  return userId;
+}
+
+export function createSearchThreadTool(threadStore: ThreadStore, userStore: UserStore): ObTool {
   return {
     name: 'search_thread',
     description:
@@ -42,7 +54,7 @@ export function createSearchThreadTool(threadStore: ThreadStore): ObTool {
         const recent  = history.slice(-limit);
         if (!recent.length) return { ok: true, output: `${threadId} 暂无历史记录。` };
         const lines = recent.map((h) => {
-          const who  = h.role === 'user' ? (h.user_id ?? 'user') : 'agent';
+          const who  = h.role === 'user' ? displayNameFor(userStore, threadId, h.user_id ?? undefined) : 'agent';
           const time = new Date(h.ts).toLocaleString('zh-CN');
           return `[${time}] ${who}: ${h.content}`;
         });
@@ -55,7 +67,7 @@ export function createSearchThreadTool(threadStore: ThreadStore): ObTool {
       }
 
       const lines = results.map((h) => {
-        const who  = h.role === 'user' ? (h.user_id ?? 'user') : 'agent';
+        const who  = h.role === 'user' ? displayNameFor(userStore, threadId, h.user_id ?? undefined) : 'agent';
         const time = new Date(h.ts).toLocaleString('zh-CN');
         return `[${time}] ${who}: ${h.content}`;
       });

@@ -37,6 +37,25 @@ import type { Logger } from '../logger/index.js';
 const MAX_TOOL_ROUNDS = 6;
 const HISTORY_CONTEXT_LIMIT = 20; // 注入 LLM 的最大历史条数
 
+/**
+ * 解析历史条目的发言者展示名。历史中可能存了渠道 raw id（如飞书 on_xxx/ou_xxx），
+ * 而 userStore 的 key 是 feishu_on_xxx，需回退查询避免人名与 id 映错。
+ */
+function getDisplayNameForHistory(
+  userStore: UserStore,
+  threadId: string,
+  userId: string | undefined,
+): string {
+  if (!userId) return 'user';
+  const u = userStore.getUser(userId);
+  if (u?.display_name) return u.display_name;
+  if (threadId.startsWith('feishu:') && (userId.startsWith('on_') || userId.startsWith('ou_'))) {
+    const canonical = userStore.getUser(`feishu_${userId}`);
+    if (canonical?.display_name) return canonical.display_name;
+  }
+  return userId;
+}
+
 export interface ConversationLoopDeps {
   llm:             LLMAdapter;
   threadStore:     ThreadStore;
@@ -338,7 +357,7 @@ function buildMessages(
       const groupName = group.group_name ?? group.peer_id;
       const lines = recentGroupHistory.map((h) => {
         const who = h.role === 'user'
-          ? (deps.userStore.getUser(h.user_id ?? '')?.display_name ?? h.user_id ?? 'user')
+          ? getDisplayNameForHistory(deps.userStore, group.thread_id, h.user_id ?? undefined)
           : (deps.getAgentDisplayName?.() ?? '本人');
         return `${who}: ${h.content}`;
       });
@@ -360,7 +379,7 @@ function buildMessages(
 
   for (const entry of recentHistory) {
     if (entry.role === 'user') {
-      const who = deps.userStore.getUser(entry.user_id ?? '')?.display_name ?? entry.user_id ?? 'user';
+      const who = getDisplayNameForHistory(deps.userStore, msg.thread_id, entry.user_id ?? undefined);
       messages.push({ role: 'user', content: `[${who}] ${entry.content}` });
     } else {
       messages.push({ role: 'assistant', content: entry.content });

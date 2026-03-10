@@ -145,7 +145,7 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
 
   // ── 外脑工具集 ────────────────────────────────────────────────────────────
   const tools: ObTool[] = [
-    createSearchThreadTool(threadStore),
+    createSearchThreadTool(threadStore, userStore),
     createSendFileTool(channelRegistry),
     obGetTimeTool,
   ];
