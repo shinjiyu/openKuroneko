@@ -144,6 +144,18 @@ export class UserStore {
   }
 
   /**
+   * 更新用户展示名（如从飞书 contact/映射表解析后回写，便于内脑与外脑显示「谁在说话」）。
+   * 仅当 displayName 非空且与当前值不同时更新。
+   */
+  updateDisplayName(userId: string, displayName: string): void {
+    if (!displayName?.trim()) return;
+    const user = this.users.get(userId);
+    if (!user || user.display_name === displayName.trim()) return;
+    user.display_name = displayName.trim();
+    this.save();
+  }
+
+  /**
    * 将一个 channel 的原始 ID 绑定到已存在的内部用户。
    * 用于管理员将动态注册的匿名用户（如 feishu_ou_xxx）关联到真实身份（如 bob）。
    *

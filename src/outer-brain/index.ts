@@ -63,6 +63,11 @@ export interface OuterBrainOptions {
    * 快速模型（可选）。用于群聊参与决策（SPEAK/SILENT 分类）。
    */
   fastLlm?: LLMAdapter | undefined;
+  /**
+   * 当前渠道下 agent 的展示名（如飞书应用名），若返回则覆盖 soul.name，
+   * 便于用户用「黑猫」等称呼时 agent 能识别是在说自己。
+   */
+  getAgentDisplayName?: () => string | undefined;
 }
 
 export { InnerBrainPool };
@@ -141,10 +146,11 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
     tools,
     logger,
     getInnerStatus,
+    ...(opts.getAgentDisplayName ? { getAgentDisplayName: opts.getAgentDisplayName } : {}),
   });
 
   // ── 群聊参与决策 ──────────────────────────────────────────────────────────
-  const participationEngine = new ParticipationEngine(llm, logger, opts.fastLlm);
+  const participationEngine = new ParticipationEngine(llm, logger, opts.fastLlm, opts.getAgentDisplayName);
 
   // ── BLOCK 升级管理器 ──────────────────────────────────────────────────────
   const soul = soulLoader.get();
@@ -307,18 +313,19 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
     logger.info('outer-brain', {
       event: 'msg.received',
       data: {
-        thread:  msg.thread_id,
-        user:    msg.user_id,
-        mention: msg.is_mention,
-        msg_id:  msg.id,
-        preview: msg.content.slice(0, 80),
+        thread:       msg.thread_id,
+        user:         msg.user_id,
+        sender_name:  msg.sender_name ?? null,
+        mention:      msg.is_mention,
+        msg_id:       msg.id,
+        preview:      msg.content.slice(0, 80),
       },
     });
 
-    // 自动注册/更新用户的 channel 绑定，确保 escalation 能找到目标 channel
+    // 自动注册/更新用户的 channel 绑定，确保 escalation 能找到目标 channel；有 sender_name 时用展示名
     userStore.register({
       userId:      msg.user_id,
-      displayName: msg.user_id,
+      displayName: msg.sender_name ?? msg.user_id,
       role:        'member',
       channels:    [{ channelId: msg.channel_id, rawId: msg.raw_user_id }],
     });

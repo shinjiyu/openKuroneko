@@ -34,8 +34,14 @@ export class ParticipationEngine {
    * @param llm        主力 LLM（fallback）
    * @param logger     日志
    * @param fastLlm    可选：专用快速模型（用于 SPEAK/SILENT 分类，无需 thinking）
+   * @param getAgentDisplayName 可选：渠道侧 agent 展示名，与 ConversationLoop 一致便于身份统一
    */
-  constructor(llm: LLMAdapter, logger: Logger, private readonly fastLlm?: LLMAdapter) {
+  constructor(
+    llm: LLMAdapter,
+    logger: Logger,
+    private readonly fastLlm?: LLMAdapter,
+    private readonly getAgentDisplayName?: () => string | undefined,
+  ) {
     this.llm    = llm;
     this.logger = logger;
   }
@@ -160,7 +166,8 @@ export class ParticipationEngine {
 - 有人向全体提问且你有有用答案
 - 对话中出现重要错误需要纠正`;
 
-    const systemPrompt = `你是 ${soul.name}，${soul.persona}。
+    const agentName = this.getAgentDisplayName?.() ?? soul.name;
+    const systemPrompt = `你是 ${agentName}，${soul.persona}。
 你是群聊里的一个真实成员，现在收到一条新消息，你没有被 @。请判断你是否应该主动接话/参与。
 参与策略：${aggressiveness}。
 

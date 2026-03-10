@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import type { Logger } from '../logger/index.js';
 
 export interface SoulConfig {
+  /** 人格名；飞书等渠道会以应用展示名覆盖，便于用户说「黑猫」时 agent 识别为自己 */
   name: string;
   persona: string;
   language: string;

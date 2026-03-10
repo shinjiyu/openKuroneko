@@ -88,6 +88,29 @@ export class FeishuOpenIdMap {
     return ids[0] ?? null;
   }
 
+  /**
+   * 按 union_id 查一条映射（任一本应用 open_id + 展示名）。
+   * 用于以 union_id 为主键时由 union_id 反查 open_id 与 name。
+   */
+  getEntryByUnionId(unionId: string): { openId: string; name?: string } | undefined {
+    const openId = this.getOpenIdForUnionId(unionId);
+    if (!openId) return undefined;
+    const entry = this.map.get(openId);
+    if (!entry) return { openId };
+    return entry.name !== undefined && entry.name !== '' ? { openId, name: entry.name } : { openId };
+  }
+
+  /**
+   * 用 open_id 或 union_id 查展示名。
+   * id 为 ou_ 前缀走 open_id，on_ 前缀走 union_id（查本应用下任一 open_id 的 name）。
+   */
+  getDisplayName(id: string): string | undefined {
+    const t = id.trim();
+    if (t.startsWith('ou_')) return this.getName(t);
+    if (t.startsWith('on_')) return this.getEntryByUnionId(t)?.name;
+    return this.getName(t) ?? this.getEntryByUnionId(t)?.name;
+  }
+
   all(): Map<string, FeishuIdEntry> {
     return new Map(this.map);
   }

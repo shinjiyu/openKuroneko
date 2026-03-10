@@ -77,6 +77,10 @@ export interface FeishuAdapterOptions {
   getOpenIdForUnionId?: (unionId: string) => string | null;
   /** 收到事件后合并 open_id/union_id/name 到映射表（用于维护 union_id↔open_id） */
   onFeishuIdsSeen?: (entries: Array<{ openId: string; unionId?: string; name?: string }>) => void;
+  /** 按 open_id 或 union_id 查展示名（用于入站消息的 sender_name，由 FeishuOpenIdMap.getDisplayName 提供） */
+  getFeishuDisplayName?: (openIdOrUnionId: string) => string | undefined;
+  /** 是否解析发送方展示名（调飞书 contact API，有配额消耗；默认 true） */
+  resolveSenderNames?: boolean;
   /** 消息中转：URL（ws/wss）、key、本 agent 标识；与 relayIngestRef 一起由外脑注入 */
   relayUrl?:      string | undefined;
   relayKey?:     string | undefined;
@@ -124,9 +128,14 @@ export class FeishuChannelAdapter implements ChannelAdapter {
   private tokenExpireAt      = 0;
   /** 启动时预取的 bot open_id（sender 无 union_id 时用于过滤自身消息，以及 @ 的 open_id 匹配） */
   private _botOpenId: string | null = null;
+  /** 启动时预取的 bot 展示名（来自飞书应用信息，用于覆盖 soul.name、供 agent 区分「自己」） */
+  private _botDisplayName: string | null = null;
   /** 中转 WebSocket（可选） */
   private relayWs: WebSocket | null = null;
   private relayReconnectTimer: ReturnType<typeof setInterval> | null = null;
+  /** 发送方展示名缓存（open_id → { name, expireAt }），减少 contact API 调用 */
+  private readonly senderNameCache = new Map<string, { name: string; expireAt: number }>();
+  private static readonly SENDER_NAME_TTL_MS = 10 * 60 * 1000;
 
   constructor(opts: FeishuAdapterOptions) {
     this.opts = { mode: 'webhook', ...opts };
@@ -170,40 +179,56 @@ export class FeishuChannelAdapter implements ChannelAdapter {
 
     // 附件优先（图片、文件）
     const attachment = msg.attachments?.[0];
-    let body: string;
+    let payload: { content: string; msg_type: string };
+    const replyToMessageId = msg.reply_to?.trim() || undefined;
 
     if (attachment?.type === 'image' && attachment.url) {
-      // 先上传图片获取 image_key
       const imageKey = await this.uploadImage(attachment.url, token);
-      body = JSON.stringify({
-        receive_id: peerId,
-        msg_type:   'image',
-        content:    JSON.stringify({ image_key: imageKey }),
-      });
+      payload = {
+        msg_type: 'image',
+        content:  JSON.stringify({ image_key: imageKey }),
+      };
     } else if (attachment?.type === 'file' && attachment.url) {
       const fileKey = await this.uploadFile(attachment.url, attachment.name ?? 'file', token);
-      body = JSON.stringify({
-        receive_id: peerId,
-        msg_type:   'file',
-        content:    JSON.stringify({ file_key: fileKey }),
-      });
+      payload = {
+        msg_type: 'file',
+        content:  JSON.stringify({ file_key: fileKey }),
+      };
     } else {
-      body = JSON.stringify({
-        receive_id: peerId,
-        msg_type:   'text',
-        content:    JSON.stringify({ text: msg.content }),
-      });
+      payload = {
+        msg_type: 'text',
+        content:  JSON.stringify({ text: msg.content ?? '' }),
+      };
     }
 
-    const res = await fetch(
-      `https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=${receiveIdType}`,
-      {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body,
-        signal:  AbortSignal.timeout(15_000),
-      },
-    );
+    let res: Response;
+    if (replyToMessageId) {
+      // 回复某条消息：使用「回复」接口，飞书会显示为引用该消息的回复
+      res = await fetch(
+        `https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(replyToMessageId)}/reply`,
+        {
+          method:  'POST',
+          headers:  { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body:     JSON.stringify(payload),
+          signal:   AbortSignal.timeout(15_000),
+        },
+      );
+    } else {
+      // 新消息：使用「发送」接口
+      const body = JSON.stringify({
+        receive_id: peerId,
+        ...payload,
+      });
+      res = await fetch(
+        `https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=${receiveIdType}`,
+        {
+          method:  'POST',
+          headers:  { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body,
+          signal:   AbortSignal.timeout(15_000),
+        },
+      );
+    }
     if (!res.ok) {
       throw new Error(`[feishu] send failed: ${res.status} ${await res.text()}`);
     }
@@ -326,6 +351,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
   // ── 模式 A：HTTP Webhook ─────────────────────────────────────────────────
 
   private async startWebhook(onMessage: (msg: InboundMessage) => Promise<void>): Promise<void> {
+    await this.prefetchBotInfo();
     const http = await import('node:http');
     const port = this.opts.webhookPort ?? 8090;
 
@@ -427,33 +453,45 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     // 保存 client 引用供 send() 使用
     this._sdkClient = client;
 
-    // 启动时预取 bot open_id，用于无 union_id 时的自身过滤与 @ 的 open_id 匹配
-    await this.prefetchBotOpenId();
+    // 启动时预取 bot open_id 与展示名
+    await this.prefetchBotInfo();
 
     wsClient.start({ eventDispatcher: dispatcher });
     console.info('[feishu] WebSocket long-connection started (no public URL needed)');
   }
 
   /**
-   * 尝试通过飞书 API 获取当前应用（机器人）的 open_id，用于精确 @ 判断。
-   * 若接口未返回或失败，仅依赖 app_id 参与 mention 匹配（飞书 @机器人 时 mention 可能带 app_id）。
+   * 通过飞书 API 获取当前应用（机器人）的 open_id 与展示名。
+   * 用于：精确 @ 判断、覆盖 soul 中的名字、让 agent 区分「自己」与「当前用户」。
    */
-  private async prefetchBotOpenId(): Promise<void> {
+  private async prefetchBotInfo(): Promise<void> {
     try {
       const token = await this.getToken();
       const res = await fetch(
         `https://open.feishu.cn/open-apis/application/v6/applications/${this.opts.appId}?lang=zh_cn`,
         { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000) },
       );
-      const data = (await res.json()) as { app?: { open_id?: string } };
-      const openId = data?.app?.open_id;
-      if (openId) {
-        this._botOpenId = openId;
+      const data = (await res.json()) as {
+        app?: { open_id?: string; name?: string; app_name?: string; display_name?: string };
+      };
+      const app = data?.app;
+      if (app?.open_id) {
+        this._botOpenId = app.open_id;
         console.info('[feishu] bot open_id prefetched (self-filter fallback and @-mention)');
       }
+      const name = app?.name ?? app?.app_name ?? app?.display_name;
+      if (typeof name === 'string' && name.trim()) {
+        this._botDisplayName = name.trim();
+        console.info('[feishu] bot display name prefetched (overrides soul.name for identity)', this._botDisplayName);
+      }
     } catch {
-      // 忽略：无 open_id 时用 app_id 参与匹配即可
+      // 忽略：无 open_id 时用 app_id 参与匹配即可；无 name 时用 soul.name
     }
+  }
+
+  /** 返回飞书侧机器人展示名（若已预取），用于覆盖 soul.name、供 agent 区分「自己」 */
+  getBotDisplayName(): string | undefined {
+    return this._botDisplayName ?? undefined;
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -526,6 +564,15 @@ export class FeishuChannelAdapter implements ChannelAdapter {
         idEntries.push({ openId, ...(unionId !== undefined && { unionId }), ...(name !== undefined && name !== '' && { name }) });
       }
     }
+    // 缺名的条目用飞书 contact API 解析展示名（可关闭以省配额）
+    if (this.opts.resolveSenderNames !== false) {
+      for (const e of idEntries) {
+        if (e.openId && !e.name) {
+          const name = await this.resolveFeishuUserName(e.openId);
+          if (name) e.name = name;
+        }
+      }
+    }
     this.opts.onFeishuIdsSeen?.(idEntries);
 
     // 内部以 union_id 为主 id：有 union_id 用 union_id，否则回退 open_id
@@ -577,6 +624,9 @@ export class FeishuChannelAdapter implements ChannelAdapter {
 
     const cleanContent = content.replace(/@\S+/g, '').trim();
 
+    const senderName =
+      this.opts.getFeishuDisplayName?.(canonicalSenderId) ?? undefined;
+
     if (this.opts.logger) {
       this.opts.logger.info('feishu', {
         event: 'inbound',
@@ -585,6 +635,8 @@ export class FeishuChannelAdapter implements ChannelAdapter {
           thread_id:    threadId,
           is_mention:   isMention,
           has_mentions: rawMentions.length,
+          sender_name:  senderName ?? null,
+          user_id:      userId,
           preview:      content.slice(0, 60),
         },
       });
@@ -596,6 +648,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       channel_id:   'feishu',
       user_id:      userId,
       raw_user_id:  senderOpenId,
+      sender_name:  senderName,
       content:      cleanContent,
       is_mention:   isMention,
       mentions,
@@ -605,6 +658,43 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       group_info:   isGroup ? { group_id: message.chat_id, group_name: message.chat_id } : undefined,
       sender_type:  sender.sender_type === 'user' || sender.sender_type === 'app' ? sender.sender_type : undefined,
     };
+  }
+
+  /**
+   * 通过飞书 contact/v3/users 解析 open_id 对应展示名，带 10 分钟内存缓存。
+   * 需应用具备 contact:user.base:readonly 等权限，否则返回 undefined。
+   */
+  private async resolveFeishuUserName(openId: string): Promise<string | undefined> {
+    const key = openId.trim();
+    if (!key) return undefined;
+    const now = Date.now();
+    const cached = this.senderNameCache.get(key);
+    if (cached && cached.expireAt > now) return cached.name;
+    try {
+      const token = await this.getToken();
+      const res = await fetch(
+        `https://open.feishu.cn/open-apis/contact/v3/users/${encodeURIComponent(key)}?user_id_type=open_id`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          signal:  AbortSignal.timeout(5000),
+        },
+      );
+      const data = (await res.json()) as {
+        data?: { user?: { name?: string; display_name?: string; nickname?: string; en_name?: string } };
+        code?: number;
+      };
+      if (data?.data?.user) {
+        const u = data.data.user;
+        const name = u.name ?? u.display_name ?? u.nickname ?? u.en_name;
+        if (typeof name === 'string' && name.trim()) {
+          this.senderNameCache.set(key, { name: name.trim(), expireAt: now + FeishuChannelAdapter.SENDER_NAME_TTL_MS });
+          return name.trim();
+        }
+      }
+    } catch {
+      // 权限不足或网络失败时静默，不阻塞消息处理
+    }
+    return undefined;
   }
 
   // ── Token 管理 ───────────────────────────────────────────────────────────

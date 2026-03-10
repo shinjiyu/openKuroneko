@@ -25,6 +25,9 @@ export interface InboundMessage {
   /** 平台原始用户标识（如飞书的 open_id） */
   raw_user_id: string;
 
+  /** 发送者展示名（飞书等从 contact 或映射表解析，供内脑/外脑区分谁在说话） */
+  sender_name?: string | undefined;
+
   /** 消息文本内容 */
   content: string;
 

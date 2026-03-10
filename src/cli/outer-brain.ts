@@ -244,10 +244,12 @@ async function main() {
     }
   }
 
+  const { writeFeishuIdentitiesFile } = await import('../users/feishu-identities.js');
   let feishuOpenIdMap: FeishuOpenIdMap | null = null;
+  let feishuAdapter: import('../channels/adapters/feishu.js').FeishuChannelAdapter | null = null;
   if (opts.feishuAppId && opts.feishuAppSecret && (opts.feishuVerifyToken || opts.feishuMode === 'websocket')) {
     feishuOpenIdMap = new FeishuOpenIdMap(obDir);
-    adapters.push(new FeishuChannelAdapter({
+    feishuAdapter = new FeishuChannelAdapter({
       appId:        opts.feishuAppId,
       appSecret:    opts.feishuAppSecret,
       ...(opts.feishuVerifyToken ? { verifyToken: opts.feishuVerifyToken } : {}),
@@ -255,7 +257,19 @@ async function main() {
       mode:         (opts.feishuMode as 'webhook' | 'websocket' | undefined) ?? 'webhook',
       webhookPort:  opts.feishuPort ? parseInt(opts.feishuPort, 10) : 8090,
       agentUnionId: feishuAgentUnionId,
-      onFeishuIdsSeen: (entries) => feishuOpenIdMap?.merge(entries),
+      onFeishuIdsSeen: (entries) => {
+        feishuOpenIdMap?.merge(entries);
+        if (_feishuUserStore && feishuOpenIdMap) {
+          for (const e of entries) {
+            const name = e.name?.trim() ?? feishuOpenIdMap.getName(e.openId);
+            if (!name) continue;
+            const uid = _feishuUserStore.resolveUser(e.openId, 'feishu') ?? (e.unionId ? _feishuUserStore.resolveUser(e.unionId, 'feishu') : null);
+            if (uid) _feishuUserStore.updateDisplayName(uid, name);
+          }
+          writeFeishuIdentitiesFile(obDir, _feishuUserStore, feishuOpenIdMap);
+        }
+      },
+      getFeishuDisplayName: (id) => feishuOpenIdMap?.getDisplayName(id),
       getOpenIdForUnionId: (uid) => feishuOpenIdMap?.getOpenIdForUnionId(uid) ?? null,
       logger,
       resolveUserFn: (rawId, channelId) => {
@@ -267,7 +281,8 @@ async function main() {
       ...(relayUrl && relayKey && relayRegisterId
         ? { relayUrl, relayKey, relayAgentId: relayRegisterId, relayIngestRef, relayLogger: logger }
         : {}),
-    }));
+    });
+    adapters.push(feishuAdapter);
     logger.info('cli', {
       event: 'channel.registered',
       data:  { channel: 'feishu', relay: !!(relayUrl && relayKey && relayRegisterId) },
@@ -297,6 +312,7 @@ async function main() {
     llm,
     logger,
     extraAdapters: adapters,
+    getAgentDisplayName: () => feishuAdapter?.getBotDisplayName?.(),
     ...(opts.soul ? { soulPath: opts.soul } : {}),
     ...(opts.escalationWaitMs ? { escalationWaitMs: parseInt(opts.escalationWaitMs, 10) } : {}),
     ...(innerBrainPool ? { innerBrainPool } : {}),
@@ -306,6 +322,11 @@ async function main() {
   // 将 userStore 注入各频道 resolver（创建后立即注入，start() 之前完成）
   _feishuUserStore    = ob.userStore;
   _dingtalkUserStore  = ob.userStore;
+
+  // 飞书身份文件：启动时写一次，之后每次 onFeishuIdsSeen 合并后也会写，供内脑读取 union_id/open_id/用户名
+  if (feishuOpenIdMap) {
+    writeFeishuIdentitiesFile(obDir, ob.userStore, feishuOpenIdMap);
+  }
 
   // 中转广播插入：收到其它 agent 发言时写入本机 thread，仅飞书插件侧使用
   relayIngestRef.current = (threadId, userId, content, ts) => {

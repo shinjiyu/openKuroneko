@@ -45,6 +45,8 @@ export interface ConversationLoopDeps {
   logger:          Logger;
   /** 读取内脑当前状态（外部提供，避免重复 IO） */
   getInnerStatus: () => InnerBrainStatus | null;
+  /** 当前渠道下 agent 展示名（如飞书应用名），若存在则覆盖 soul.name，便于区分「自己」 */
+  getAgentDisplayName?: () => string | undefined;
 }
 
 export class ConversationLoop {
@@ -72,7 +74,7 @@ export class ConversationLoop {
     const innerStatus = this.deps.getInnerStatus();
 
     // 构建系统提示
-    const systemPrompt = buildSystemPrompt(soul, msg, threadStore, innerStatus);
+    const systemPrompt = buildSystemPrompt(soul, msg, threadStore, this.deps, innerStatus);
 
     // 构建消息历史
     const messages = buildMessages(msg, threadStore, this.deps, soul);
@@ -116,8 +118,14 @@ export class ConversationLoop {
           const tool = tools.find((t) => t.name === tc.name);
           let output: string;
 
+          // 引用回复：若用户消息是「回复某条消息」且工具未显式传 reply_to_msg_id，自动带入
+          const toolArgs =
+            tc.name === 'reply_to_user' && msg.reply_to && tc.args['reply_to_msg_id'] == null
+              ? { ...tc.args, reply_to_msg_id: msg.reply_to }
+              : tc.args;
+
           if (tool) {
-            const res = await tool.call(tc.args);
+            const res = await tool.call(toolArgs);
             output = res.output;
           } else {
             output = `工具 ${tc.name} 不存在`;
@@ -146,9 +154,13 @@ export class ConversationLoop {
         event: 'loop.send',
         data: { thread: msg.thread_id, content_len: finalReply.length, preview: finalReply.slice(0, 80) },
       });
-      // 发送回复到对应频道
+      // 发送回复到对应频道（若用户消息是引用回复，则带上 reply_to 以在飞书显示为引用）
       try {
-        await channelRegistry.send({ thread_id: msg.thread_id, content: finalReply });
+        await channelRegistry.send({
+          thread_id: msg.thread_id,
+          content:   finalReply,
+          reply_to:  msg.reply_to,
+        });
       } catch (e) {
         logger.error('outer-brain', {
           event: 'loop.send_error',
@@ -175,10 +187,15 @@ function buildSystemPrompt(
   soul: SoulConfig,
   msg: InboundMessage,
   threadStore: ThreadStore,
+  deps: ConversationLoopDeps,
   innerStatus?: import('../channels/types.js').InnerBrainStatus | null,
 ): string {
   const isGroup = msg.thread_id.includes(':group:');
   const statusDesc = isGroup ? '群聊对话' : '私信对话';
+
+  // 展示名：渠道侧名字（如飞书应用名）覆盖 soul.name，便于用户说「黑猫」时 agent 知道在说自己
+  const agentDisplayName = deps.getAgentDisplayName?.() ?? soul.name;
+  const senderDisplayName = msg.sender_name ?? msg.user_id;
 
   // 注入所有已知 thread（显示人类可读名称 + 精确 thread_id）
   const knownThreads = threadStore.listThreadsWithNames();
@@ -202,14 +219,19 @@ function buildSystemPrompt(
     `- 如需停止当前任务并重新派发，先调用 stop_inner_brain，再调用 set_goal`,
   ].join('\n');
 
+  const identityHint =
+    `【身份说明】你在本对话中的展示名是「${agentDisplayName}」——当用户提到该名字时，指的是你（本机器人）。当前这条消息的发送者展示名是「${senderDisplayName}」——当用户说「我」或「自己」时，指的是该发送者。请根据用户措辞区分他们是在说你、说自己、还是说其他人。`;
+
   const groupReplyRule = isGroup
     ? `\n【群聊回复】当前是群聊，请尽量用简短内容回复（一两句、口语化即可），避免长段落和 1.2.3. 列表，像真人接话。需要展开时再展开。\n`
     : '';
 
-  return `你是 ${soul.name}，${soul.persona}。
+  return `你是 ${agentDisplayName}，${soul.persona}。
 当前场景：${statusDesc}（thread: ${msg.thread_id}）
 语言：${soul.language}${groupReplyRule}
 ${threadList}
+
+${identityHint}
 
 ${permissionRules}
 
@@ -270,7 +292,7 @@ function buildMessages(
 
       const groupName = group.group_name ?? group.peer_id;
       const lines = recentGroupHistory.map((h) => {
-        const who = h.role === 'user' ? (h.user_id ?? 'user') : soul.name;
+        const who = h.role === 'user' ? (h.user_id ?? 'user') : (deps.getAgentDisplayName?.() ?? soul.name);
         return `${who}: ${h.content}`;
       });
 
@@ -298,9 +320,10 @@ function buildMessages(
     }
   }
 
-  // 当前消息（支持多模态：图片附件转为 image_url content block）
+  // 当前消息（支持多模态：图片附件转为 image_url content block）；有 sender_name 时用展示名便于区分谁在说话
   const mention  = msg.is_mention ? '（@了你）' : '';
-  const textPart = `[${msg.user_id}${mention}] ${msg.content}`;
+  const speaker   = msg.sender_name ?? msg.user_id;
+  const textPart = `[${speaker}${mention}] ${msg.content}`;
   const imageAtts = (msg.attachments ?? []).filter(
     (a) => a.type === 'image' && a.url && (a.url.startsWith('data:') || a.url.startsWith('http')),
   );

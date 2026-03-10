@@ -25,6 +25,7 @@ chat-agent/.tool-outputs/
 ob-agent/threads/
 ob-agent/webchat-users.json
 ob-agent/soul.md
+ob-agent/feishu-identities.json
 
 # 中转服务鉴权（仅服务器本地，禁止入库）
 relay/.env
