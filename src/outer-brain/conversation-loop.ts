@@ -332,7 +332,9 @@ function buildMessages(
 
       const groupName = group.group_name ?? group.peer_id;
       const lines = recentGroupHistory.map((h) => {
-        const who = h.role === 'user' ? (h.user_id ?? 'user') : (deps.getAgentDisplayName?.() ?? soul.name);
+        const who = h.role === 'user'
+          ? (deps.userStore.getUser(h.user_id ?? '')?.display_name ?? h.user_id ?? 'user')
+          : (deps.getAgentDisplayName?.() ?? soul.name);
         return `${who}: ${h.content}`;
       });
 
@@ -353,7 +355,7 @@ function buildMessages(
 
   for (const entry of recentHistory) {
     if (entry.role === 'user') {
-      const who = entry.user_id ?? 'user';
+      const who = deps.userStore.getUser(entry.user_id ?? '')?.display_name ?? entry.user_id ?? 'user';
       messages.push({ role: 'user', content: `[${who}] ${entry.content}` });
     } else {
       messages.push({ role: 'assistant', content: entry.content });

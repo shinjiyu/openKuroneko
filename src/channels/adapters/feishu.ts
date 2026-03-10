@@ -58,8 +58,22 @@ import type { Logger } from '../../logger/index.js';
 import type { ChannelAdapter, InboundMessage, OutboundMessage, MessageAttachment } from '../types.js';
 
 /** 收到中转广播时插入群聊记录的回调（由外脑注入，current 在 ob 创建后赋值） */
+export interface RelayBroadcastIngestOptions {
+  /** 发送方展示名（如机器人名），用于 UserStore 与对话中的发言人显示 */
+  sender_name?: string;
+  /** 发送方 union_id（飞书跨应用一致），便于身份映射 */
+  sender_union_id?: string;
+  /** 发送方 open_id（本应用下），便于身份映射 */
+  sender_open_id?: string;
+}
 export interface RelayIngestRef {
-  current: ((threadId: string, userId: string, content: string, ts: number) => void) | null;
+  current: ((
+    threadId: string,
+    userId: string,
+    content: string,
+    ts: number,
+    opts?: RelayBroadcastIngestOptions,
+  ) => void) | null;
 }
 
 export interface FeishuAdapterOptions {
@@ -242,10 +256,13 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       if (relayReady) {
         try {
           this.relayWs!.send(JSON.stringify({
-            type:       'speak',
-            thread_id:  msg.thread_id,
-            content:    msg.content,
-            ts:         Date.now(),
+            type:                  'speak',
+            thread_id:             msg.thread_id,
+            content:               msg.content,
+            ts:                    Date.now(),
+            sender_display_name:   this._botDisplayName ?? this.opts.relayAgentId ?? undefined,
+            sender_union_id:       this.opts.agentUnionId ?? undefined,
+            sender_open_id:        this._botOpenId ?? undefined,
           }));
           this.opts.relayLogger?.info('feishu', { event: 'relay.speak', data: { thread_id: msg.thread_id, preview: (msg.content ?? '').slice(0, 60) } });
         } catch (e) {
@@ -315,9 +332,13 @@ export class FeishuChannelAdapter implements ChannelAdapter {
           const userId   = data.sender_agent_id as string;
           const content = typeof data.content === 'string' ? data.content : '';
           const ts      = typeof data.ts === 'number' ? data.ts : Date.now();
-          relayIngestRef?.current?.(threadId, userId, content, ts);
-          console.log(`[relay] 收到广播 来自=${userId} thread=${threadId} preview=${content.slice(0, 40)}...`);
-          relayLogger?.debug('feishu', { event: 'relay.broadcast_ingest', data: { thread_id: threadId, sender: userId, preview: content.slice(0, 50) } });
+          const opts: RelayBroadcastIngestOptions = {};
+          if (typeof data.sender_display_name === 'string') opts.sender_name = data.sender_display_name;
+          if (typeof data.sender_union_id === 'string') opts.sender_union_id = data.sender_union_id;
+          if (typeof data.sender_open_id === 'string') opts.sender_open_id = data.sender_open_id;
+          relayIngestRef?.current?.(threadId, userId, content, ts, Object.keys(opts).length > 0 ? opts : undefined);
+          console.log(`[relay] 收到广播 来自=${userId}${opts.sender_name ? ` (${opts.sender_name})` : ''} thread=${threadId} preview=${content.slice(0, 40)}...`);
+          relayLogger?.debug('feishu', { event: 'relay.broadcast_ingest', data: { thread_id: threadId, sender: userId, sender_name: opts.sender_name, preview: content.slice(0, 50) } });
         }
       } catch {
         // ignore malformed

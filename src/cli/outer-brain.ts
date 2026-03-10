@@ -334,9 +334,24 @@ async function main() {
     writeFeishuIdentitiesFile(obDir, ob.userStore, feishuOpenIdMap);
   }
 
-  // 中转广播插入：收到其它 agent 发言时写入本机 thread，仅飞书插件侧使用
-  relayIngestRef.current = (threadId, userId, content, ts) => {
+  // 中转广播插入：收到其它 agent 发言时写入本机 thread；带 sender_name/union_id/open_id 时注册用户与身份映射
+  relayIngestRef.current = (threadId, userId, content, ts, ingestOpts) => {
     ob.threadStore.ensureThread(threadId, 'feishu', ts);
+    if (ingestOpts?.sender_name) {
+      ob.userStore.register({
+        userId:      userId,
+        displayName: ingestOpts.sender_name,
+        role:        'member',
+        channels:    ingestOpts.sender_open_id ? [{ channelId: 'feishu', rawId: ingestOpts.sender_open_id }] : [],
+      });
+    }
+    if (feishuOpenIdMap && ingestOpts?.sender_open_id?.trim()) {
+      feishuOpenIdMap.merge([{
+        openId:   ingestOpts.sender_open_id.trim(),
+        unionId:  ingestOpts.sender_union_id,
+        name:     ingestOpts.sender_name,
+      }]);
+    }
     ob.threadStore.appendUser(threadId, userId, content, ts);
   };
 
