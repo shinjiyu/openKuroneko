@@ -24,6 +24,7 @@
  */
 
 import type { LLMAdapter, Message, ContentBlock } from '../adapter/index.js';
+import type { KnowledgeStore } from '../archive/index.js';
 import type { InboundMessage, InnerBrainStatus } from '../channels/types.js';
 import type { ChannelRegistry } from '../channels/registry.js';
 import type { ThreadStore } from '../threads/store.js';
@@ -47,6 +48,8 @@ export interface ConversationLoopDeps {
   getInnerStatus: () => InnerBrainStatus | null;
   /** 当前渠道下 agent 展示名（如飞书应用名），若存在则覆盖 soul.name，便于区分「自己」 */
   getAgentDisplayName?: () => string | undefined;
+  /** 全局知识库。提供后按用户消息检索相关历史知识并注入上下文，便于直接回答而不再派发内脑 */
+  knowledgeStore?: KnowledgeStore;
 }
 
 export class ConversationLoop {
@@ -73,11 +76,35 @@ export class ConversationLoop {
     // 读取内脑状态（用于权限规则注入）
     const innerStatus = this.deps.getInnerStatus();
 
+    // 按用户消息检索全局知识库，便于基于历史任务产出直接回答
+    let historicalContext = '';
+    if (this.deps.knowledgeStore && msg.content.trim()) {
+      try {
+        const sessions = await this.deps.knowledgeStore.retrieve(msg.content.trim(), {
+          maxSessions: 3,
+          knowledgeThreshold: 0.25,
+          maxCharsPerType: 1200,
+        });
+        historicalContext = this.deps.knowledgeStore.buildContext(sessions);
+        if (historicalContext) {
+          logger.info('outer-brain', {
+            event: 'knowledge.retrieve',
+            data: { sessions: sessions.length, preview: historicalContext.slice(0, 100) },
+          });
+        }
+      } catch (e) {
+        logger.warn('outer-brain', {
+          event: 'knowledge.retrieve_error',
+          data: { error: String(e) },
+        });
+      }
+    }
+
     // 构建系统提示
     const systemPrompt = buildSystemPrompt(soul, msg, threadStore, this.deps, innerStatus);
 
-    // 构建消息历史
-    const messages = buildMessages(msg, threadStore, this.deps, soul);
+    // 构建消息历史（含检索到的历史知识）
+    const messages = buildMessages(msg, threadStore, this.deps, soul, historicalContext);
 
     logger.info('outer-brain', {
       event: 'loop.start',
@@ -250,9 +277,22 @@ function buildMessages(
   threadStore: ThreadStore,
   deps: ConversationLoopDeps,
   soul: SoulConfig,
+  historicalContext?: string,
 ): Message[] {
   const messages: Message[] = [];
   const isGroup = msg.thread_id.includes(':group:');
+
+  // 全局知识库检索结果（过往任务产出的 constraints/skills/knowledge），优先注入便于直接回答
+  if (historicalContext && historicalContext.trim()) {
+    messages.push({
+      role: 'user',
+      content: `[系统：历史知识]\n${historicalContext.trim()}`,
+    });
+    messages.push({
+      role: 'assistant',
+      content: '已了解历史知识；若用户问题可由上述内容回答，请直接回复，无需再派发新任务。',
+    });
+  }
 
   // 内脑状态摘要
   const innerStatus = deps.getInnerStatus();

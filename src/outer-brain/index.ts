@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import type { LLMAdapter } from '../adapter/index.js';
+import type { KnowledgeStore } from '../archive/index.js';
 import type { Logger } from '../logger/index.js';
 import type { InboundMessage } from '../channels/types.js';
 import { ChannelRegistry } from '../channels/registry.js';
@@ -68,6 +69,11 @@ export interface OuterBrainOptions {
    * 便于用户用「黑猫」等称呼时 agent 能识别是在说自己。
    */
   getAgentDisplayName?: () => string | undefined;
+  /**
+   * 全局知识库（可选）。提供后，外脑在回复前会按用户消息检索相关历史知识并注入上下文，
+   * 便于直接基于过往任务产出回答，避免重复派发内脑。
+   */
+  knowledgeStore?: KnowledgeStore;
 }
 
 export { InnerBrainPool };
@@ -147,6 +153,7 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
     logger,
     getInnerStatus,
     ...(opts.getAgentDisplayName ? { getAgentDisplayName: opts.getAgentDisplayName } : {}),
+    ...(opts.knowledgeStore ? { knowledgeStore: opts.knowledgeStore } : {}),
   });
 
   // ── 群聊参与决策 ──────────────────────────────────────────────────────────

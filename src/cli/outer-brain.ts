@@ -29,6 +29,7 @@ import os from 'node:os';
 
 import { createLogger } from '../logger/index.js';
 import { createOpenAIAdapter } from '../adapter/index.js';
+import { createFilesystemStore } from '../archive/index.js';
 import { createOuterBrain, InnerBrainPool } from '../outer-brain/index.js';
 import { mergeWorkDirSkillsToAgentPool } from '../outer-brain/agent-pool.js';
 import { resolveIdentity } from '../identity/index.js';
@@ -309,10 +310,13 @@ async function main() {
 
   // ── 创建外脑 ──────────────────────────────────────────────────────────────
 
+  const knowledgeStore = createFilesystemStore();
+
   const ob = createOuterBrain({
     obDir,
     llm,
     logger,
+    knowledgeStore,
     extraAdapters: adapters,
     getAgentDisplayName: () => feishuAdapter?.getBotDisplayName?.(),
     ...(opts.soul ? { soulPath: opts.soul } : {}),

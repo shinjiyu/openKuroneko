@@ -258,6 +258,20 @@ export class PushLoop {
       content:     `✅ 任务完成！\n\n${output.message}${textSection}`,
       attachments: attachments.length > 0 ? attachments : undefined,
     });
+
+    // 任务完成：关闭该内脑实例，避免 BLOCKED 态进程常驻
+    try {
+      await this.opts.pool.stop(instanceId);
+      this.opts.logger.info('push-loop', {
+        event: 'complete.inner_stopped',
+        data: { instanceId },
+      });
+    } catch (e) {
+      this.opts.logger.warn('push-loop', {
+        event: 'complete.stop_failed',
+        data: { instanceId, error: String(e) },
+      });
+    }
   }
 
   private async handleProgress(output: InnerBrainOutput): Promise<void> {
