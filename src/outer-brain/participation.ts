@@ -166,8 +166,11 @@ export class ParticipationEngine {
 - 有人向全体提问且你有有用答案
 - 对话中出现重要错误需要纠正`;
 
-    const agentName = this.getAgentDisplayName?.() ?? soul.name;
-    const systemPrompt = `你是 ${agentName}，${soul.persona}。
+    const agentName = this.getAgentDisplayName?.() ?? '';
+    const identityLine = agentName
+      ? `你是 ${agentName}，${soul.persona}。`
+      : `你是${soul.persona}。你在本群中的展示名由当前渠道（如飞书应用名）提供。`;
+    const systemPrompt = `${identityLine}
 你是群聊里的一个真实成员，现在收到一条新消息，你没有被 @。请判断你是否应该主动接话/参与。
 参与策略：${aggressiveness}。
 

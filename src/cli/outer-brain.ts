@@ -52,7 +52,7 @@ program
   .option('--soul <path>', 'soul.md 路径（默认 <dir>/soul.md）')
   .option('--webchat-port <port>', '开启 WebChat 频道，监听指定端口（如 8091）')
   .option('--webchat-cors <origin>', 'WebChat CORS 允许来源（默认 "*"）')
-  .option('--agent-name <name>', 'Agent 在群聊中被 @ 的名字（默认 "Kuroneko"）')
+  .option('--agent-name <name>', 'Agent 在群聊中被 @ 的名字（仅 WebChat；飞书由应用名提供，不设则无默认）')
   .option('--feishu-app-id <id>', '飞书 App ID')
   .option('--feishu-app-secret <secret>', '飞书 App Secret')
   .option('--feishu-verify-token <token>', '飞书 HTTP Webhook 事件验证 Token')

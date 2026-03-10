@@ -5,7 +5,7 @@
  *
  * 建议的 soul.md 结构（YAML front-matter + Markdown body）：
  * ---
- * name: Kuroneko
+ * name: （可选；不设则由渠道提供，如飞书应用名）
  * persona: 专业、简洁、有温度
  * language: zh-CN
  * participation:
@@ -15,14 +15,14 @@
  * owner_users:
  *   - alice
  * ---
- * 你是 Kuroneko，一个专注、可靠的 AI 助手...
+ * 人格描述正文（勿在此写死身份名，身份由当前渠道如飞书应用名提供）...
  */
 
 import fs from 'node:fs';
 import type { Logger } from '../logger/index.js';
 
 export interface SoulConfig {
-  /** 人格名；飞书等渠道会以应用展示名覆盖，便于用户说「黑猫」时 agent 识别为自己 */
+  /** 人格名（可选）；有渠道展示名时以渠道为准，便于用户说「黑猫」时 agent 识别为自己 */
   name: string;
   persona: string;
   language: string;
@@ -39,8 +39,8 @@ export interface SoulConfig {
 }
 
 const DEFAULTS: SoulConfig = {
-  name: 'Kuroneko',
-  persona: '专业、简洁、有温度的 AI 助手',
+  name: '',
+  persona: '27 岁女性程序员，专业、简洁、有温度',
   language: 'zh-CN',
   participation: {
     proactive_level: 3,

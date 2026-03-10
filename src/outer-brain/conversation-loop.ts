@@ -220,8 +220,8 @@ function buildSystemPrompt(
   const isGroup = msg.thread_id.includes(':group:');
   const statusDesc = isGroup ? '群聊对话' : '私信对话';
 
-  // 展示名：渠道侧名字（如飞书应用名）覆盖 soul.name，便于用户说「黑猫」时 agent 知道在说自己
-  const agentDisplayName = deps.getAgentDisplayName?.() ?? soul.name;
+  // 展示名：仅使用渠道侧名字（如飞书应用名），不写死身份名
+  const agentDisplayName = deps.getAgentDisplayName?.() ?? '';
   const senderDisplayName = msg.sender_name ?? msg.user_id;
 
   // 注入所有已知 thread（显示人类可读名称 + 精确 thread_id）
@@ -246,14 +246,19 @@ function buildSystemPrompt(
     `- 如需停止当前任务并重新派发，先调用 stop_inner_brain，再调用 set_goal`,
   ].join('\n');
 
-  const identityHint =
-    `【身份说明】你在本对话中的展示名是「${agentDisplayName}」——当用户提到该名字时，指的是你（本机器人）。当前这条消息的发送者展示名是「${senderDisplayName}」——当用户说「我」或「自己」时，指的是该发送者。请根据用户措辞区分他们是在说你、说自己、还是说其他人。`;
+  const identityHint = agentDisplayName
+    ? `【身份说明】你在本对话中的展示名是「${agentDisplayName}」——当用户提到该名字时，指的是你。当前这条消息的发送者展示名是「${senderDisplayName}」——当用户说「我」或「自己」时，指的是该发送者。请根据用户措辞区分他们是在说你、说自己、还是说其他人。`
+    : `【身份说明】你的展示名由当前接入渠道提供（如飞书应用名）；当用户提到该名字时指的是你。当前这条消息的发送者展示名是「${senderDisplayName}」——当用户说「我」或「自己」时，指的是该发送者。请根据用户措辞区分他们是在说你、说自己、还是说其他人。`;
 
   const groupReplyRule = isGroup
     ? `\n【群聊回复】当前是群聊，请尽量用简短内容回复（一两句、口语化即可），避免长段落和 1.2.3. 列表，像真人接话。需要展开时再展开。\n`
     : '';
 
-  return `你是 ${agentDisplayName}，${soul.persona}。
+  const openingLine = agentDisplayName
+    ? `你是 ${agentDisplayName}，${soul.persona}。`
+    : `你是${soul.persona}。你的展示名由当前渠道（如飞书应用名）提供。`;
+
+  return `${openingLine}
 当前场景：${statusDesc}（thread: ${msg.thread_id}）
 语言：${soul.language}${groupReplyRule}
 ${threadList}
@@ -334,7 +339,7 @@ function buildMessages(
       const lines = recentGroupHistory.map((h) => {
         const who = h.role === 'user'
           ? (deps.userStore.getUser(h.user_id ?? '')?.display_name ?? h.user_id ?? 'user')
-          : (deps.getAgentDisplayName?.() ?? soul.name);
+          : (deps.getAgentDisplayName?.() ?? '本人');
         return `${who}: ${h.content}`;
       });
 

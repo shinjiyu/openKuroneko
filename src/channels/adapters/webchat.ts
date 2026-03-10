@@ -69,7 +69,7 @@ export interface WebchatAdapterOptions {
    * 不存在时允许匿名（anonymous），生产环境建议必须配置。
    */
   usersConfigPath?: string | undefined;
-  /** agent 在群聊中被 @提及时使用的名字（如 "Kuroneko"），用于识别 mention */
+  /** agent 在群聊中被 @提及时使用的名字（由渠道或配置提供；不设则无法通过 @ 触发回复） */
   agentName?: string | undefined;
   /** CORS 允许来源，默认 "*" */
   corsOrigin?: string | undefined;
@@ -467,12 +467,14 @@ export class WebchatChannelAdapter implements ChannelAdapter {
       : `webchat:dm:${user.user_id}`;
 
     // 检测 @mention（群聊中提到 agent 名字）
-    const agentName   = this.opts.agentName ?? 'Kuroneko';
-    const isMention   = isGroup && (
+    const agentName   = this.opts.agentName ?? '';
+    const isMention   = isGroup && !!agentName && (
       content.includes(`@${agentName}`) ||
       content.toLowerCase().includes(`@${agentName.toLowerCase()}`)
     );
-    const cleanContent = content.replace(new RegExp(`@${agentName}`, 'gi'), '').trim();
+    const cleanContent = agentName
+      ? content.replace(new RegExp(`@${agentName}`, 'gi'), '').trim()
+      : content.trim();
 
     const msg: InboundMessage = {
       id:          `webchat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
