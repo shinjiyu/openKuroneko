@@ -93,6 +93,8 @@ export interface FeishuAdapterOptions {
   onFeishuIdsSeen?: (entries: Array<{ openId: string; unionId?: string; name?: string }>) => void;
   /** 按 open_id 或 union_id 查展示名（用于入站消息的 sender_name，由 FeishuOpenIdMap.getDisplayName 提供） */
   getFeishuDisplayName?: (openIdOrUnionId: string) => string | undefined;
+  /** 按展示名反查 open_id（用于出站 @名字 → at 标签，由 FeishuOpenIdMap.getOpenIdByDisplayName 提供） */
+  getOpenIdForDisplayName?: (displayName: string) => string | undefined;
   /** 是否解析发送方展示名（调飞书 contact API，有配额消耗；默认 true） */
   resolveSenderNames?: boolean;
   /** 消息中转：URL（ws/wss）、key、本 agent 标识；与 relayIngestRef 一起由外脑注入 */
@@ -172,6 +174,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
   // ── 发送消息 ─────────────────────────────────────────────────────────────
 
   async send(msg: OutboundMessage): Promise<void> {
+    const sendStart = Date.now();
     const token = await this.getToken();
 
     const parts  = msg.thread_id.split(':');
@@ -193,6 +196,33 @@ export class FeishuChannelAdapter implements ChannelAdapter {
 
     const replyToMessageId = msg.reply_to?.trim() || undefined;
     const attachments = msg.attachments ?? [];
+
+    // 出站 @：飞书需 at 标签或 post at 元素才渲染；支持 @ou_/@on_（id）和 @名字（展示名反查 open_id）
+    let outText = (msg.content ?? '').trim() || ' ';
+    const beforeReplace = outText;
+    outText = outText
+      .replace(/@(ou_[a-zA-Z0-9]+)/g, (_, id: string) =>
+        `<at user_id="${id}">${this.opts.getFeishuDisplayName?.(id) ?? id}</at>`)
+      .replace(/@(on_[a-zA-Z0-9]+)/g, (_, id: string) =>
+        `<at user_id="${id}">${this.opts.getFeishuDisplayName?.(id) ?? id}</at>`);
+
+    if (this.opts.getOpenIdForDisplayName) {
+      outText = outText.replace(/@([^\s@]+)/g, (_, name: string) => {
+        const openId = this.opts.getOpenIdForDisplayName?.(name);
+        return openId ? `<at user_id="${openId}">${name}</at>` : `@${name}`;
+      });
+    }
+    const hasAtTag = /<at\s+user_id=/.test(outText);
+    if (this.opts.logger && (hasAtTag || beforeReplace !== outText)) {
+      this.opts.logger.info('feishu', {
+        event: 'send.at',
+        data: {
+          raw_preview:    beforeReplace.slice(0, 120),
+          after_preview:  outText.slice(0, 200),
+          has_at_tag:     hasAtTag,
+        },
+      });
+    }
 
     const sendOne = async (payload: { content: string; msg_type: string }, useReply?: string): Promise<void> => {
       let res: Response;
@@ -220,12 +250,30 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       if (!res.ok) throw new Error(`[feishu] send failed: ${res.status} ${await res.text()}`);
     };
 
-    // 1) 先发文本（有内容或仅附件时发一条占位/说明）
-    const textPayload = {
-      msg_type: 'text',
-      content:  JSON.stringify({ text: (msg.content ?? '').trim() || ' ' }),
-    };
-    await sendOne(textPayload, replyToMessageId);
+    // 1) 先发文本或富文本（含 @ 时用 post 类型 + at 元素，飞书渲染更稳定）
+    if (hasAtTag) {
+      const atTagRegex = /<at\s+user_id="([^"]+)">([^<]*)<\/at>/g;
+      const elements: Array<{ tag: 'text'; text: string } | { tag: 'at'; user_id: string; user_name: string }> = [];
+      let lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = atTagRegex.exec(outText)) !== null) {
+        if (m.index > lastIndex) {
+          elements.push({ tag: 'text', text: outText.slice(lastIndex, m.index) });
+        }
+        elements.push({ tag: 'at', user_id: m[1]!, user_name: m[2] ?? m[1]! });
+        lastIndex = m.index + m[0].length;
+      }
+      if (lastIndex < outText.length) {
+        elements.push({ tag: 'text', text: outText.slice(lastIndex) });
+      }
+      const postContent = { zh_cn: { title: '', content: [elements] } };
+      await sendOne({ msg_type: 'post', content: JSON.stringify(postContent) }, replyToMessageId);
+    } else {
+      await sendOne(
+        { msg_type: 'text', content: JSON.stringify({ text: outText }) },
+        replyToMessageId,
+      );
+    }
 
     // 2) 再按顺序发每条附件（多附件：每条一条消息）
     for (const att of attachments) {
@@ -246,6 +294,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
           content_len:   (msg.content ?? '').length,
           attachments:   attachments.length,
           preview:       (msg.content ?? '').slice(0, 60),
+          duration_ms:   Date.now() - sendStart,
         },
       });
     }
@@ -557,14 +606,15 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       (this._botOpenId !== null && senderOpenId === this._botOpenId);
     if (isSelf) return null;
 
-    // 从事件中抽取 open_id / union_id / name，写入映射表（内部以 union_id 为主 id 时需维护 union_id↔open_id）
-    const getIdParts = (id: unknown): { openId: string; unionId?: string } => {
+    // 从事件中抽取 open_id / union_id / app_id；被 @ 的机器人可能只带 app_id（无 open_id）
+    const getIdParts = (id: unknown): { openId: string; unionId?: string; appId?: string } => {
       if (id == null) return { openId: '' };
       if (typeof id === 'string') return { openId: id.trim() };
       const o = id as Record<string, unknown>;
       const openId = typeof o['open_id'] === 'string' ? (o['open_id'] as string).trim() : '';
       const unionId = typeof o['union_id'] === 'string' ? (o['union_id'] as string).trim() : undefined;
-      return unionId === undefined ? { openId } : { openId, unionId };
+      const appId = typeof o['app_id'] === 'string' ? (o['app_id'] as string).trim() : undefined;
+      return { openId, ...(unionId !== undefined && { unionId }), ...(appId !== undefined && appId !== '' && { appId }) };
     };
     const idEntries: Array<{ openId: string; unionId?: string; name?: string }> = [
       senderUnionId === undefined ? { openId: senderOpenId } : { openId: senderOpenId, unionId: senderUnionId },
@@ -615,12 +665,15 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       return typeof m.id === 'string' ? m.id : '';
     });
 
-    // Agent 自我识别：union_id 配置 + 预取 open_id（mentions 可能只带其一）
-    const botOpenId = this._botOpenId?.trim() ?? '';
+    // Agent 自我识别：app_id（@ 机器人时事件常只带 app_id）+ union_id + 预取 open_id
+    const botOpenId  = this._botOpenId?.trim() ?? '';
     const botUnionId = this.opts.agentUnionId?.trim() ?? '';
-    const mentionOpenIds = rawMentions.map((m) => getIdParts(m.id).openId);
+    const botAppId   = this.opts.appId?.trim() ?? '';
+    const mentionOpenIds  = rawMentions.map((m) => getIdParts(m.id).openId);
     const mentionUnionIds = rawMentions.map((m) => getIdParts(m.id).unionId).filter(Boolean) as string[];
+    const mentionAppIds   = rawMentions.map((m) => getIdParts(m.id).appId).filter(Boolean) as string[];
     const isMention =
+      (botAppId !== '' && mentionAppIds.some((aid) => aid === botAppId)) ||
       (botOpenId !== '' && mentionOpenIds.some((oid) => oid === botOpenId)) ||
       (botUnionId !== '' && mentionUnionIds.some((uid) => uid === botUnionId));
 
@@ -629,8 +682,10 @@ export class FeishuChannelAdapter implements ChannelAdapter {
         event: 'mention.eval',
         data: {
           thread_id:        threadId,
+          bot_app_id:       botAppId || null,
           bot_open_id:      botOpenId || null,
           bot_union_id:     botUnionId || null,
+          mention_app_ids:  mentionAppIds,
           mention_open_ids: mentionOpenIds,
           mention_union_ids: mentionUnionIds,
           is_mention:       isMention,
@@ -639,7 +694,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       });
     }
 
-    // 将 @ key 替换为 <at user_id="open_id">显示名</at>，机器人自己的 @ 替换为空（参考 OpenClaw）
+    // 将 @ key 替换为 <at user_id="open_id">显示名</at>（发送 at 仅支持 open_id/union_id/user_id）；机器人自己的 @ 替换为空
     const nameByOpenId = new Map<string, string>();
     for (const e of idEntries) {
       if (e.openId && e.name) nameByOpenId.set(e.openId, e.name);
@@ -649,6 +704,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       rawMentions,
       botOpenId,
       botUnionId,
+      botAppId,
       getIdParts,
       (openId, fallback) => nameByOpenId.get(openId) ?? this.opts.getFeishuDisplayName?.(openId) ?? fallback ?? openId,
     );
@@ -886,7 +942,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
 
 // ── @ 提及归一化（参考 OpenClaw normalizeMentions）────────────────────────────────
 // 将正文中的 mention key（如 @_user_1）替换为 <at user_id="open_id">显示名</at>，便于 LLM 知道 @ 了谁；
-// 若 @ 的是机器人自己则替换为空，避免截断 /help 等命令。
+// 若 @ 的是机器人自己则替换为空，避免截断 /help 等命令。被 @ 机器人时事件常只带 app_id，需用 app_id 判是否为自己。
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -898,12 +954,15 @@ function escapeAtName(s: string): string {
 
 type RawMention = { id: string | Record<string, unknown>; key: string; name?: string };
 
+type IdParts = { openId: string; unionId?: string; appId?: string };
+
 function normalizeMentions(
   text: string,
   mentions: RawMention[] | undefined,
   botOpenId: string,
   botUnionId: string,
-  getIdParts: (id: unknown) => { openId: string; unionId?: string },
+  botAppId: string,
+  getIdParts: (id: unknown) => IdParts,
   getDisplayName: (openId: string, fallbackName: string) => string,
 ): string {
   if (!mentions?.length) return text;
@@ -911,9 +970,11 @@ function normalizeMentions(
   for (const m of mentions) {
     const key = (m.key ?? '').trim();
     if (!key) continue;
-    const { openId, unionId } = getIdParts(m.id);
+    const { openId, unionId, appId } = getIdParts(m.id);
     const isBot =
-      (botOpenId && openId === botOpenId) || (botUnionId && unionId === botUnionId);
+      (botAppId !== '' && appId === botAppId) ||
+      (botOpenId !== '' && openId === botOpenId) ||
+      (botUnionId !== '' && unionId === botUnionId);
     const replacement = isBot
       ? ''
       : openId

@@ -274,6 +274,7 @@ async function main() {
       },
       getFeishuDisplayName: (id) => feishuOpenIdMap?.getDisplayName(id),
       getOpenIdForUnionId: (uid) => feishuOpenIdMap?.getOpenIdForUnionId(uid) ?? null,
+      getOpenIdForDisplayName: (name) => feishuOpenIdMap?.getOpenIdByDisplayName(name),
       logger,
       resolveUserFn: (rawId, channelId) => {
         if (_feishuUserStore) {

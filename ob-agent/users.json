@@ -28,5 +28,71 @@
     ],
     "created_at": 1772984272497,
     "last_seen_at": 1772987609745
+  },
+  {
+    "user_id": "feishu_on_c02179a7f12f94e9cd8efa3f64979f7a",
+    "display_name": "于振宇",
+    "role": "member",
+    "channels": [
+      {
+        "channel_id": "feishu",
+        "raw_id": "on_c02179a7f12f94e9cd8efa3f64979f7a",
+        "priority": 1
+      },
+      {
+        "channel_id": "feishu",
+        "raw_id": "ou_9163765bbe607c016a2f4be74a884b0f",
+        "priority": 1
+      }
+    ],
+    "created_at": 1773058512133,
+    "last_seen_at": 1773135924682
+  },
+  {
+    "user_id": "feishu_on_94626acdda9676a3ff1aee6c9c58bf73",
+    "display_name": "blackcat",
+    "role": "member",
+    "channels": [
+      {
+        "channel_id": "feishu",
+        "raw_id": "on_94626acdda9676a3ff1aee6c9c58bf73",
+        "priority": 1
+      }
+    ],
+    "created_at": 1773058512135,
+    "last_seen_at": 1773058512135
+  },
+  {
+    "user_id": "feishu_on_efa363b520e0656c14a823b813e38094",
+    "display_name": "kuroneko",
+    "role": "member",
+    "channels": [
+      {
+        "channel_id": "feishu",
+        "raw_id": "on_efa363b520e0656c14a823b813e38094",
+        "priority": 1
+      }
+    ],
+    "created_at": 1773061102170,
+    "last_seen_at": 1773061102170
+  },
+  {
+    "user_id": "feishu_on_601e633b474a26510c7e9b6bb19e1fca",
+    "display_name": "张彬",
+    "role": "member",
+    "channels": [
+      {
+        "channel_id": "feishu",
+        "raw_id": "on_601e633b474a26510c7e9b6bb19e1fca",
+        "priority": 1
+      },
+      {
+        "channel_id": "feishu",
+        "raw_id": "ou_9104c61f55037fdec2319e61acc832c1",
+        "priority": 1
+      }
+    ],
+    "created_at": 1773064233283,
+    "last_seen_at": 1773133575359
   }
 ]

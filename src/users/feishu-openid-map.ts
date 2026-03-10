@@ -111,6 +111,22 @@ export class FeishuOpenIdMap {
     return this.getName(t) ?? this.getEntryByUnionId(t)?.name;
   }
 
+  /**
+   * 按展示名反查一个 open_id（用于出站 @：把 @名字 转成 at 标签）。
+   * 多个条目同名时返回第一个；无匹配返回 undefined。
+   * 匹配不区分大小写（LLM 可能输出 Kuroneko，map 存 kuroneko）。
+   */
+  getOpenIdByDisplayName(displayName: string): string | undefined {
+    const want = displayName.trim();
+    if (!want) return undefined;
+    const wantLower = want.toLowerCase();
+    for (const [openId, entry] of this.map) {
+      const entryName = entry.name?.trim();
+      if (entryName !== undefined && entryName !== '' && entryName.toLowerCase() === wantLower) return openId;
+    }
+    return undefined;
+  }
+
   all(): Map<string, FeishuIdEntry> {
     return new Map(this.map);
   }
