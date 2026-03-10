@@ -360,10 +360,13 @@ function buildMessages(
     }
   }
 
-  // 当前消息（支持多模态：图片附件转为 image_url content block）；有 sender_name 时用展示名便于区分谁在说话
-  const mention  = msg.is_mention ? '（@了你）' : '';
+  // 当前消息（支持多模态：图片附件转为 image_url content block）；有 sender_name 时用展示名便于区分谁在说话；有引用时带上被引用内容
+  const mention   = msg.is_mention ? '（@了你）' : '';
   const speaker   = msg.sender_name ?? msg.user_id;
-  const textPart = `[${speaker}${mention}] ${msg.content}`;
+  const baseText  = `[${speaker}${mention}] ${msg.content}`;
+  const textPart  = msg.quoted_content
+    ? `[回复自: ${msg.quoted_content}]\n\n${baseText}`
+    : baseText;
   const imageAtts = (msg.attachments ?? []).filter(
     (a) => a.type === 'image' && a.url && (a.url.startsWith('data:') || a.url.startsWith('http')),
   );

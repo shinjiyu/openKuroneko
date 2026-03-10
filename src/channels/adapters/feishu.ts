@@ -576,8 +576,12 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       ? `feishu:group:${message.chat_id}`
       : `feishu:dm:${canonicalSenderId}`;
 
-    // 解析消息内容（按 message_type 分发）
-    const { content, attachments: rawAttachments } = parseFeishuContent(message.message_type, message.content);
+    // 解析消息内容（post 时传入 rawMentions，at 按顺序用 key 占位供 normalizeMentions 替换）
+    const { content, attachments: rawAttachments } = parseFeishuContent(
+      message.message_type,
+      message.content,
+      rawMentions,
+    );
 
     // 图片类附件：立刻下载并转为 base64 data URL，方便 LLM 多模态直接消费
     const attachments = await this.resolveAttachments(rawAttachments);
@@ -614,7 +618,19 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       });
     }
 
-    const cleanContent = content.replace(/@\S+/g, '').trim();
+    // 将 @ key 替换为 <at user_id="open_id">显示名</at>，机器人自己的 @ 替换为空（参考 OpenClaw）
+    const nameByOpenId = new Map<string, string>();
+    for (const e of idEntries) {
+      if (e.openId && e.name) nameByOpenId.set(e.openId, e.name);
+    }
+    const normalizedContent = normalizeMentions(
+      content,
+      rawMentions,
+      botOpenId,
+      botUnionId,
+      getIdParts,
+      (openId, fallback) => nameByOpenId.get(openId) ?? this.opts.getFeishuDisplayName?.(openId) ?? fallback ?? openId,
+    );
 
     const senderName =
       this.opts.getFeishuDisplayName?.(canonicalSenderId) ?? undefined;
@@ -641,7 +657,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       user_id:      userId,
       raw_user_id:  senderOpenId,
       sender_name:  senderName,
-      content:      cleanContent,
+      content:      normalizedContent,
       is_mention:   isMention,
       mentions,
       ts:           Number(message.create_time),
@@ -649,7 +665,57 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       attachments,
       group_info:   isGroup ? { group_id: message.chat_id, group_name: message.chat_id } : undefined,
       sender_type:  sender.sender_type === 'user' || sender.sender_type === 'app' ? sender.sender_type : undefined,
+      ...(await this.fetchQuotedContent(message.parent_id)),
     };
+  }
+
+  /**
+   * 拉取被引用消息正文（parent_id），供 agent 看到「回复自」内容。失败或已撤回时返回空对象。
+   */
+  private async fetchQuotedContent(parentId: string | undefined): Promise<{ quoted_content?: string }> {
+    if (!parentId?.trim()) return {};
+    try {
+      const text = await this.getMessageContent(parentId.trim());
+      if (text?.trim()) return { quoted_content: text.trim() };
+    } catch (e) {
+      if (this.opts.logger) {
+        this.opts.logger.debug('feishu', {
+          event: 'quoted.fetch_failed',
+          data: { parent_id: parentId, error: String(e) },
+        });
+      }
+    }
+    return {};
+  }
+
+  /**
+   * 根据 message_id 拉取单条消息正文（用于引用回复场景）。撤回或不可见时返回 null。
+   */
+  private async getMessageContent(messageId: string): Promise<string | null> {
+    const token = await this.getToken();
+    const res = await fetch(
+      `https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        signal:  AbortSignal.timeout(8000),
+      },
+    );
+    const data = (await res.json()) as {
+      code?: number;
+      data?: {
+        items?: Array<{ body?: { content?: string }; msg_type?: string; deleted?: boolean }>;
+        body?: { content?: string };
+        msg_type?: string;
+        deleted?: boolean;
+      };
+    };
+    if (data.code !== 0) return null;
+    const raw = data.data?.items?.[0] ?? data.data;
+    if (!raw || raw.deleted) return null;
+    const msgType = raw.msg_type ?? 'text';
+    const contentStr = (raw as { body?: { content?: string } }).body?.content ?? '';
+    const { content } = parseFeishuContent(msgType, contentStr);
+    return content?.trim() ? content : null;
   }
 
   /**
@@ -797,11 +863,52 @@ export class FeishuChannelAdapter implements ChannelAdapter {
   }
 }
 
-// ── 消息内容解析 ──────────────────────────────────────────────────────────────
+// ── @ 提及归一化（参考 OpenClaw normalizeMentions）────────────────────────────────
+// 将正文中的 mention key（如 @_user_1）替换为 <at user_id="open_id">显示名</at>，便于 LLM 知道 @ 了谁；
+// 若 @ 的是机器人自己则替换为空，避免截断 /help 等命令。
 
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function escapeAtName(s: string): string {
+  return s.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+type RawMention = { id: string | Record<string, unknown>; key: string; name?: string };
+
+function normalizeMentions(
+  text: string,
+  mentions: RawMention[] | undefined,
+  botOpenId: string,
+  botUnionId: string,
+  getIdParts: (id: unknown) => { openId: string; unionId?: string },
+  getDisplayName: (openId: string, fallbackName: string) => string,
+): string {
+  if (!mentions?.length) return text;
+  let result = text;
+  for (const m of mentions) {
+    const key = (m.key ?? '').trim();
+    if (!key) continue;
+    const { openId, unionId } = getIdParts(m.id);
+    const isBot =
+      (botOpenId && openId === botOpenId) || (botUnionId && unionId === botUnionId);
+    const replacement = isBot
+      ? ''
+      : openId
+        ? `<at user_id="${openId}">${escapeAtName(getDisplayName(openId, m.name ?? ''))}</at>`
+        : `@${escapeAtName(m.name ?? '')}`;
+    result = result.replace(new RegExp(escapeRegex(key), 'g'), () => replacement);
+  }
+  return result.trim();
+}
+
+// ── 消息内容解析 ──────────────────────────────────────────────────────────────
+/** rawMentions 仅用于 post：按顺序将 at 元素替换为 mention.key，便于后续 normalizeMentions 识别是谁 */
 function parseFeishuContent(
   msgType: string,
   contentStr: string,
+  rawMentions?: RawMention[],
 ): { content: string; attachments: MessageAttachment[] } {
   const empty = { content: '', attachments: [] as MessageAttachment[] };
 
@@ -844,17 +951,28 @@ function parseFeishuContent(
       }
 
       case 'post': {
-        // 富文本：提取所有 text 节点
+        // 富文本：提取 text；at 按顺序用 rawMentions[i].key 占位，便于 normalizeMentions 替换为 <at>显示名</at>
         const zh = (obj['zh_cn'] ?? obj['en_us'] ?? obj) as {
           title?: string;
           content?: unknown[][];
         };
+        let atIndex = 0;
         const lines: string[] = [];
         if (zh.title) lines.push(zh.title);
         for (const row of zh.content ?? []) {
-          const rowText = row
-            .filter((el): el is { tag: string; text?: string } => typeof el === 'object')
-            .map((el) => (el.tag === 'text' ? el.text ?? '' : el.tag === 'at' ? '@' : ''))
+          const rowText = (row as unknown[])
+            .filter((el): el is Record<string, unknown> => typeof el === 'object' && el !== null)
+            .map((el) => {
+              if (el['tag'] === 'text') return String(el['text'] ?? '');
+              if (el['tag'] === 'at') {
+                if (rawMentions && atIndex < rawMentions.length) {
+                  return rawMentions[atIndex++]!.key;
+                }
+                atIndex++;
+                return '@';
+              }
+              return '';
+            })
             .join('');
           if (rowText) lines.push(rowText);
         }

@@ -43,6 +43,9 @@ export interface InboundMessage {
   /** 回复的消息 ID（如果是回复） */
   reply_to?: string | undefined;
 
+  /** 被引用/回复的那条消息的正文（部分渠道可拉取，供 agent 理解语境） */
+  quoted_content?: string | undefined;
+
   /** 附件（图片、文件等） */
   attachments?: MessageAttachment[] | undefined;
 

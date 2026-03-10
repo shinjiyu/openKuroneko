@@ -187,3 +187,55 @@ Agent 回复中的“带文件”是通过 `ReplyPayload.mediaUrls` / `mediaUrl`
 - **入站**：`InboundMessage.reply_to = message.parent_id`，下游可知「本条是回复哪条」；可选增强：拉取被引用消息内容并拼进 content 或单独字段，方便 Agent 理解语境。
 - **出站**：当 `OutboundMessage.reply_to` 有值时，飞书适配器应调 `POST /im/v1/messages/:reply_to/reply` 而不是 create，这样飞书端会显示为「引用该消息的回复」。
 - **对话循环**：若用户消息带 `reply_to`，在调用 `reply_to_user` 时未传 `reply_to_msg_id` 则自动带入；无工具调用时的直接回复也带上 `msg.reply_to`。
+
+---
+
+## 7. 多模态（图片 / 文件 / 音视频）
+
+### 7.1 入站：媒体解析与落盘
+
+**入口**：`handleFeishuMessage` 里先 `resolveFeishuMediaList(...)` 得到媒体列表，再 `buildAgentMediaPayload(mediaList)` 得到传给 Agent 的媒体字段。
+
+**resolveFeishuMediaList**（`bot.ts`）：
+
+- **支持类型**：`image`、`file`、`audio`、`video`、`media`、`sticker`、**post**（富文本内嵌图/文件）。
+- **Post 消息**：
+  - `parsePostContent(content)` 得到 `textContent`（正文）、`imageKeys`、`mediaKeys`。
+  - 正文里图片/媒体位置由 `post.ts` 的 `renderElement` 占位：`img` → `"![image]"`，`media` → `"[media]"`，即 Agent 看到的 body 中已带这些占位符。
+  - 对每个 `imageKey`：调用 **downloadMessageResourceFeishu**（`im.messageResource.get`，`type: "image"`，注意 post 内嵌图用 message_id + file_key 即 image_key）；`saveMediaBuffer` 落盘；得到 `{ path, contentType, placeholder: "<media:image>" }`。
+  - 对每个 `mediaKeys` 项：同样 `messageResource.get(..., type: "file")`，落盘，`placeholder: "<media:video>"`。
+- **单条媒体消息**（message_type 为 image/file/audio/video/media/sticker）：
+  - `parseMediaKeys(content, messageType)` 从 content JSON 取 `image_key` / `file_key`。
+  - `toMessageResourceType(messageType)`：image → `"image"`，其余 → `"file"`。
+  - 一次 **downloadMessageResourceFeishu**（message_id + file_key + type），落盘，`inferPlaceholder(messageType)` 得到 `<media:image>` / `<media:video>` / `<media:audio>` 等（该 placeholder 在 FeishuMediaInfo 里，未再写回正文）。
+- **下载 API**：`media.ts` 中 **downloadMessageResourceFeishu** 调 `client.im.messageResource.get({ path: { message_id, file_key }, params: { type } })`，支持 `type: "image" | "file"`；返回 buffer，由调用方做 contentType 检测（可选 `core.media.detectMime`）并 `saveMediaBuffer`。
+- **大小限制**：`mediaMaxMb`（默认 30MB），超限不落盘。
+
+**buildAgentMediaPayload**（`plugin-sdk/agent-media-payload.ts`）：
+
+- 入参：`mediaList: Array<{ path: string; contentType?: string | null }>`（无 placeholder）。
+- 出参：**AgentMediaPayload** = `MediaPath` / `MediaType` / `MediaUrl`（首项 path）、`MediaPaths` / `MediaUrls` / `MediaTypes`（多资源）。
+- 在 `finalizeInboundContext` 时 **...mediaPayload** 展开，Agent 侧拿到 **Body**（文本，Post 时含 `![image]`、`[media]` 占位）+ **MediaPath(s)/MediaUrls(s)/MediaTypes**（本地落盘路径与类型），由运行时用路径加载给多模态模型。
+
+### 7.2 正文与媒体的配合
+
+- **Body**：`buildFeishuAgentBody` 只用 `ctx.content`。该 content 来自 `parseMessageContent`：
+  - text → 直接文本；
+  - post → `parsePostContent` 的 `textContent`（内嵌图/媒体处已是 `![image]`、`[media]`）；
+  - image/file 等单媒体类型 → `parseMessageContent` 返回原始 content 或未特别处理，正文可能仍是原始 JSON 或占位；**实际媒体靠 mediaPayload 的 MediaPath 等带出**。
+- 因此：**多模态 = 正文（含可选占位符）+ 独立媒体字段（路径/类型）**，由上层把路径解析为可访问的 URL 或直接读文件喂给视觉/多模态模型。
+
+### 7.3 出站（发图/发文件）
+
+- 已在本文档 **§3 发文件**、**§4 发图片** 描述：Agent 回复通过 `ReplyPayload.mediaUrls` / `mediaUrl` 传到 reply-dispatcher，对每个 URL/路径调 **sendMediaFeishu**（`media.ts`）：图片 → uploadImageFeishu + sendImageFeishu；文件/音视频 → uploadFileFeishu + sendFileFeishu（msgType: file/audio/media）。
+
+### 7.4 小结（多模态）
+
+| 方向 | 数据来源 | 处理 |
+|------|----------|------|
+| 入站·正文 | message.content + message_type | parseMessageContent → ctx.content；Post 时含 `![image]`、`[media]` |
+| 入站·媒体 | 同上 + message_id | resolveFeishuMediaList → 下载 → saveMediaBuffer → path；buildAgentMediaPayload → MediaPath(s)/MediaUrls/MediaTypes |
+| 入站·给 Agent | Body + mediaPayload | finalizeInboundContext 里 Body + ...mediaPayload，运行时用 MediaPath 加载多模态 |
+| 出站 | ReplyPayload.mediaUrls | sendMediaFeishu → 上传 + 发消息（image/file/audio/media） |
+
+核心代码位置：`extensions/feishu/src/bot.ts`（resolveFeishuMediaList、handleFeishuMessage）、`extensions/feishu/src/media.ts`（downloadMessageResourceFeishu、upload/send）、`extensions/feishu/src/post.ts`（parsePostContent、renderElement 占位）、`plugin-sdk/agent-media-payload.ts`（buildAgentMediaPayload）。
