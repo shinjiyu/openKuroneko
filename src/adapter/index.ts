@@ -72,3 +72,4 @@ export interface LLMAdapter {
 }
 
 export { createOpenAIAdapter, type ToolWireFormat } from './openai.js';
+export { createGLMAdapter } from './glm.js';

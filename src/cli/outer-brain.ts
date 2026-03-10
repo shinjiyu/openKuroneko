@@ -28,7 +28,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 
 import { createLogger } from '../logger/index.js';
-import { createOpenAIAdapter } from '../adapter/index.js';
+import { createOpenAIAdapter, createGLMAdapter } from '../adapter/index.js';
 import { createFilesystemStore } from '../archive/index.js';
 import { createOuterBrain, InnerBrainPool } from '../outer-brain/index.js';
 import { mergeWorkDirSkillsToAgentPool } from '../outer-brain/agent-pool.js';
@@ -135,14 +135,15 @@ async function main() {
   const innerIdentity = resolveIdentity(innerDir);
   const innerTempDir  = innerIdentity.tempDir;
   const config = loadConfig(innerTempDir);
-  // 外脑主 LLM：关闭 thinking。Kimi k2.5 用 thinking: { type: "disabled" }，否则 reasoning_content 会报错
+  // 外脑主 LLM：关闭 thinking。智谱用 GLM 适配器（含图时走 paas + 视觉模型），其它用 OpenAI 兼容适配器
   const baseUrl = process.env['OPENAI_BASE_URL'] ?? '';
   const noThinkingBody = baseUrl.includes('moonshot')
     ? { thinking: { type: 'disabled' as const } }
     : { enable_thinking: false };
-  const llm = createOpenAIAdapter(
-    config.model ? { model: config.model, extraBody: noThinkingBody } : { extraBody: noThinkingBody },
-  );
+  const llmOptions = config.model ? { model: config.model, extraBody: noThinkingBody } : { extraBody: noThinkingBody };
+  const llm = baseUrl.includes('bigmodel.cn')
+    ? createGLMAdapter(llmOptions)
+    : createOpenAIAdapter(llmOptions);
 
   const fastModelName = opts.fastModel ?? process.env['FAST_MODEL'];
   const fastLlm = fastModelName
