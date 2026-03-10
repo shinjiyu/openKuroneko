@@ -78,12 +78,30 @@ export interface OuterBrainOptions {
 
 export { InnerBrainPool };
 
+/** 中转广播 ingest 时的可选信息（与 RelayBroadcastIngestOptions 一致） */
+export interface RelayIngestOptions {
+  sender_name?: string;
+  sender_union_id?: string;
+  sender_open_id?: string;
+}
+
 export interface OuterBrain {
   channelRegistry: ChannelRegistry;
   userStore:       UserStore;
   threadStore:     ThreadStore;
   start():         Promise<void>;
   stop():          Promise<void>;
+  /**
+   * 中转广播写入 thread 后调用，触发「是否参与回复」决策。
+   * 由 CLI 在 relay ingest 回调末尾调用。
+   */
+  onRelayMessageIngested(
+    threadId: string,
+    userId: string,
+    content: string,
+    ts: number,
+    opts?: RelayIngestOptions,
+  ): void;
 }
 
 export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
@@ -395,18 +413,7 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
       return;
     }
 
-    // 其它机器人的发言：只记入 thread，不回复（保持上下文完整）
-    if (msg.sender_type === 'app') {
-      threadStore.getOrCreate(msg);
-      threadStore.appendUser(msg.thread_id, msg.user_id, msg.content, msg.ts);
-      logger.info('outer-brain', {
-        event: 'group.skip',
-        data: { thread: msg.thread_id, reason: 'other_bot', user: msg.user_id },
-      });
-      return;
-    }
-
-    // 非 @mention 群消息：先进入延迟队列，到期后再做参与决策（形成对话感，避免抢答）
+    // 群消息（不区分真人/机器人）：进入延迟队列，到期后做参与决策
     enqueueForParticipate(msg);
   }
 
@@ -420,6 +427,35 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
         data: { thread: msg.thread_id, error: String(e) },
       });
     }
+  }
+
+  /** 中转广播写入 thread 后调用：构造合成消息并走参与决策，有机会回复 */
+  function onRelayMessageIngested(
+    threadId: string,
+    userId: string,
+    content: string,
+    ts: number,
+    opts?: RelayIngestOptions,
+  ): void {
+    const channelId = threadId.split(':')[0] ?? 'feishu';
+    const msg: InboundMessage = {
+      id:          `relay-${ts}-${Math.random().toString(36).slice(2, 9)}`,
+      thread_id:   threadId,
+      channel_id:  channelId,
+      user_id:     userId,
+      raw_user_id: userId,
+      content,
+      is_mention:  false,
+      mentions:    [],
+      ts,
+      sender_name: opts?.sender_name,
+      sender_type: undefined,
+    };
+    logger.info('outer-brain', {
+      event: 'relay.ingest.participate',
+      data: { thread: threadId, from: userId, preview: content.slice(0, 60) },
+    });
+    void runParticipateDecision(msg, { alreadyAppended: true });
   }
 
   // ── 生命周期 ──────────────────────────────────────────────────────────────
@@ -454,5 +490,5 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
     logger.info('outer-brain', { event: 'stop', data: {} });
   }
 
-  return { channelRegistry, userStore, threadStore, start, stop };
+  return { channelRegistry, userStore, threadStore, start, stop, onRelayMessageIngested };
 }

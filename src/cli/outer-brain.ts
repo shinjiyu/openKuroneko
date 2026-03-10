@@ -335,7 +335,8 @@ async function main() {
     writeFeishuIdentitiesFile(obDir, ob.userStore, feishuOpenIdMap);
   }
 
-  // 中转广播插入：收到其它 agent 发言时写入本机 thread；带 sender_name/union_id/open_id 时注册用户与身份映射
+  // 中转广播插入：收到其它 agent 发言时写入本机 thread；带 sender_name/union_id/open_id 时注册用户与身份映射；并触发参与决策以便有机会回复
+  // 若飞书已推送过同一条（其他机器人发言），可能已 append 过一次，用简单去重避免重复写入
   relayIngestRef.current = (threadId, userId, content, ts, ingestOpts) => {
     ob.threadStore.ensureThread(threadId, 'feishu', ts);
     if (ingestOpts?.sender_name) {
@@ -347,13 +348,24 @@ async function main() {
       });
     }
     if (feishuOpenIdMap && ingestOpts?.sender_open_id?.trim()) {
-      feishuOpenIdMap.merge([{
-        openId:   ingestOpts.sender_open_id.trim(),
-        unionId:  ingestOpts.sender_union_id,
-        name:     ingestOpts.sender_name,
-      }]);
+      const entry: { openId: string; unionId?: string; name?: string } = {
+        openId: ingestOpts.sender_open_id.trim(),
+      };
+      if (ingestOpts.sender_union_id) entry.unionId = ingestOpts.sender_union_id;
+      if (ingestOpts.sender_name) entry.name = ingestOpts.sender_name;
+      feishuOpenIdMap.merge([entry]);
     }
-    ob.threadStore.appendUser(threadId, userId, content, ts);
+    const history = ob.threadStore.getHistory(threadId);
+    const last = history[history.length - 1];
+    const likelyDuplicate =
+      last?.role === 'user' &&
+      last.user_id === userId &&
+      last.content === content &&
+      Math.abs((last.ts ?? 0) - ts) < 15_000;
+    if (!likelyDuplicate) {
+      ob.threadStore.appendUser(threadId, userId, content, ts);
+    }
+    ob.onRelayMessageIngested(threadId, userId, content, ts, ingestOpts);
   };
 
   // ── 信号处理 ──────────────────────────────────────────────────────────────

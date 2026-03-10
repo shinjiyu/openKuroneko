@@ -52,7 +52,7 @@ export interface InboundMessage {
   /** 群聊类型。DM 时为 undefined */
   group_info?: GroupInfo | undefined;
 
-  /** 发送者类型（飞书等：'user' | 'app'）。为 'app' 时表示其它机器人发言，仅记入 thread 不回复 */
+  /** 发送者类型（飞书等：'user' | 'app'），仅作元数据，外脑不据此区分是否回复 */
   sender_type?: 'user' | 'app' | undefined;
 }
 
