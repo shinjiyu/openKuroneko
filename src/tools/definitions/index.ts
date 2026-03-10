@@ -11,6 +11,9 @@ export { getTimeTool } from './get-time.js';
 export { runAgentTool } from './run-agent.js';
 export { capabilityGapTool, setCapabilityGapTempDir, readPendingGaps, resolveGap } from './capability-gap.js';
 export { listAgentsTool, stopAgentTool } from './agent-registry.js';
+export { createQueryAvailableSkillsTool } from './query-available-skills.js';
+export { getSkillContentTool } from './get-skill-content.js';
+export { registerDeliverableTool, setDeliverablesTempDir } from './register-deliverable.js';
 // Attributor 专用工具
 export { writeConstraintTool } from './write-constraint.js';
 export { writeSkillTool } from './write-skill.js';

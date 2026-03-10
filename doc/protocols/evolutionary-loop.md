@@ -131,8 +131,8 @@
 <knowledge.md 全文，或 "暂无已知事实">
 
 ---
-## 技能库（可复用操作模式）
-<skills.md 全文，或 "暂无已积累技能">
+## 技能库（可复用操作模式，渐进式披露）
+与当前里程碑相关的技能**仅先给出索引**（id、category、title、tags）。需要某条技能的完整内容与操作步骤时，调用工具 **get_skill_content(skill_id)** 获取。若暂无本地技能，可调用 **query_available_skills** 查询外部技能库。详见 [技能渐进式披露设计](../designs/skills-progressive-disclosure.md)。
 
 ---
 ## 工作目录
@@ -150,7 +150,8 @@
 执行规则：
 - 只做「当前 Active 里程碑」要求的事，不碰其他里程碑
 - 严格遵守 Constraints 里的所有约束，红线绝对不可越
-- 优先参考 Skills 里已有的成功操作模式，避免重复探索
+- 技能库首轮仅提供索引；需要某条技能的完整步骤时，调用 get_skill_content(skill_id) 获取（渐进式披露）
+- 优先参考已获取的技能内容与约束，避免重复探索
 - 文件路径使用相对路径（相对于工作目录）
 - 不要直接修改 .brain/ 目录下的文件（由框架管理）
 - 当你认为本次执行循环做得差不多了，停止调用工具
@@ -168,6 +169,8 @@
 | `web_search` | 搜索外部信息 |
 | `get_time` | 获取当前时间 |
 | `seek_context` | 检索归档上下文 |
+| `get_skill_content` | 按 skill_id 获取单条技能的完整内容（渐进式披露按需加载） |
+| `query_available_skills` | 按 query 查询外部技能库，返回匹配技能的摘要/全文 |
 
 **输出处理**：控制器执行多轮工具调用直到 LLM 停止返回 tool calls，记录完整 `executionLog`（含 preState 快照和 postState 快照），然后强制进入 Attributor。
 

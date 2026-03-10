@@ -177,69 +177,61 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       }
     }
 
-    // 附件优先（图片、文件）
-    const attachment = msg.attachments?.[0];
-    let payload: { content: string; msg_type: string };
     const replyToMessageId = msg.reply_to?.trim() || undefined;
+    const attachments = msg.attachments ?? [];
 
-    if (attachment?.type === 'image' && attachment.url) {
-      const imageKey = await this.uploadImage(attachment.url, token);
-      payload = {
-        msg_type: 'image',
-        content:  JSON.stringify({ image_key: imageKey }),
-      };
-    } else if (attachment?.type === 'file' && attachment.url) {
-      const fileKey = await this.uploadFile(attachment.url, attachment.name ?? 'file', token);
-      payload = {
-        msg_type: 'file',
-        content:  JSON.stringify({ file_key: fileKey }),
-      };
-    } else {
-      payload = {
-        msg_type: 'text',
-        content:  JSON.stringify({ text: msg.content ?? '' }),
-      };
-    }
+    const sendOne = async (payload: { content: string; msg_type: string }, useReply?: string): Promise<void> => {
+      let res: Response;
+      if (useReply) {
+        res = await fetch(
+          `https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(useReply)}/reply`,
+          {
+            method:  'POST',
+            headers:  { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body:     JSON.stringify(payload),
+            signal:   AbortSignal.timeout(15_000),
+          },
+        );
+      } else {
+        res = await fetch(
+          `https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=${receiveIdType}`,
+          {
+            method:  'POST',
+            headers:  { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body:     JSON.stringify({ receive_id: peerId, ...payload }),
+            signal:   AbortSignal.timeout(15_000),
+          },
+        );
+      }
+      if (!res.ok) throw new Error(`[feishu] send failed: ${res.status} ${await res.text()}`);
+    };
 
-    let res: Response;
-    if (replyToMessageId) {
-      // 回复某条消息：使用「回复」接口，飞书会显示为引用该消息的回复
-      res = await fetch(
-        `https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(replyToMessageId)}/reply`,
-        {
-          method:  'POST',
-          headers:  { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body:     JSON.stringify(payload),
-          signal:   AbortSignal.timeout(15_000),
-        },
-      );
-    } else {
-      // 新消息：使用「发送」接口
-      const body = JSON.stringify({
-        receive_id: peerId,
-        ...payload,
-      });
-      res = await fetch(
-        `https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=${receiveIdType}`,
-        {
-          method:  'POST',
-          headers:  { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body,
-          signal:   AbortSignal.timeout(15_000),
-        },
-      );
-    }
-    if (!res.ok) {
-      throw new Error(`[feishu] send failed: ${res.status} ${await res.text()}`);
+    // 1) 先发文本（有内容或仅附件时发一条占位/说明）
+    const textPayload = {
+      msg_type: 'text',
+      content:  JSON.stringify({ text: (msg.content ?? '').trim() || ' ' }),
+    };
+    await sendOne(textPayload, replyToMessageId);
+
+    // 2) 再按顺序发每条附件（多附件：每条一条消息）
+    for (const att of attachments) {
+      if (att.type === 'image' && att.url) {
+        const imageKey = await this.uploadImage(att.url, token);
+        await sendOne({ msg_type: 'image', content: JSON.stringify({ image_key: imageKey }) });
+      } else if ((att.type === 'file' || att.type === 'audio' || att.type === 'video') && att.url) {
+        const fileKey = await this.uploadFile(att.url, att.name ?? 'file', token);
+        await sendOne({ msg_type: 'file', content: JSON.stringify({ file_key: fileKey }) });
+      }
     }
 
     if (this.opts.logger) {
       this.opts.logger.info('feishu', {
         event: 'send',
         data: {
-          thread_id:   msg.thread_id,
-          content_len: msg.content?.length ?? 0,
-          preview:     (msg.content ?? '').slice(0, 60),
+          thread_id:     msg.thread_id,
+          content_len:   (msg.content ?? '').length,
+          attachments:   attachments.length,
+          preview:       (msg.content ?? '').slice(0, 60),
         },
       });
     }

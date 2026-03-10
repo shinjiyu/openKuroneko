@@ -29,8 +29,13 @@ import {
   webSearchTool, getTimeTool, runAgentTool,
   capabilityGapTool, setCapabilityGapTempDir,
   listAgentsTool, stopAgentTool,
+  createQueryAvailableSkillsTool,
+  getSkillContentTool,
+  registerDeliverableTool,
+  setDeliverablesTempDir,
   writeConstraintTool, writeSkillTool, writeKnowledgeTool,
 } from '../tools/definitions/index.js';
+import { createObSkillProvider } from '../skills/provider.js';
 import { setWorkDirGuard } from '../tools/definitions/workdir-guard.js';
 import { BrainFS } from '../brain/index.js';
 import { createFilesystemStore } from '../archive/index.js';
@@ -135,13 +140,20 @@ async function main() {
   // M8 — Tools setup
   setWorkDirGuard(identity.workDir, identity.tempDir);
   setCapabilityGapTempDir(identity.tempDir);
+  setDeliverablesTempDir(identity.tempDir);
 
-  // Executor 工具集：全套标准工具
+  // 查询可用技能：接口形态，当前查外脑技能库（由外脑 spawn 时通过 OPENKURONEKO_OB_SKILL_POOL 注入）
+  const skillProvider = createObSkillProvider(process.env.OPENKURONEKO_OB_SKILL_POOL);
+
+  // Executor 工具集：全套标准工具（含渐进式披露：get_skill_content 按需拉取技能全文）
   const executorToolRegistry = createToolRegistry([
     readFileTool, writeFileTool, editFileTool,
     shellExecTool, shellExecBgTool, shellReadOutputTool, shellKillTool,
     webSearchTool, getTimeTool, runAgentTool,
     capabilityGapTool,
+    createQueryAvailableSkillsTool(skillProvider),
+    getSkillContentTool,
+    registerDeliverableTool,
     listAgentsTool, stopAgentTool,
   ]);
 

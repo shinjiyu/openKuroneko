@@ -23,6 +23,7 @@ import path from 'node:path';
 
 import type { Logger } from '../logger/index.js';
 import { deriveAgentId, globalTmpDir } from '../identity/index.js';
+import { getAgentPoolBrainDir, seedRelevantSkillsToWorkDir } from './agent-pool.js';
 
 // ── 类型定义 ──────────────────────────────────────────────────────────────────
 
@@ -97,7 +98,7 @@ export class InnerBrainPool {
     fs.mkdirSync(workDir, { recursive: true });
     fs.mkdirSync(path.join(tempDir, 'logs'), { recursive: true });
 
-    // 写入初始目标到 input 文件
+    // 写入初始目标到 input 文件（供 BLOCKED 态消费）
     const inputFile  = path.join(tempDir, 'input');
     const threadLine = originThread ? `origin_thread: ${originThread}\n` : '';
     const message    = `[NEW_GOAL]\norigin_user: ${originUser}\n${threadLine}\n${goal}`;
@@ -105,16 +106,24 @@ export class InnerBrainPool {
     // offset 从 0 开始（新实例，新文件）
     fs.writeFileSync(path.join(tempDir, 'input.offset'), '0', 'utf8');
 
-    // 初始化 status 文件
+    // 同时写入 workDir/.brain/goal.md，避免内脑首 tick 默认 DECOMPOSE 时读到空 goal 直接 BLOCK
+    const brainDir = path.join(workDir, '.brain');
+    fs.mkdirSync(brainDir, { recursive: true });
+    fs.writeFileSync(path.join(brainDir, 'goal.md'), message + '\n', 'utf8');
+
+    // 初始化 status 文件（blocked 必须与 mode 一致：mode===BLOCKED ⇒ blocked===true）
     const initStatus = {
       ts:               new Date().toISOString(),
       mode:             'BLOCKED',
       milestone:        null,
       goal_origin_user: originUser,
-      blocked:          false,
+      blocked:          true,
       block_reason:     null,
     };
     fs.writeFileSync(path.join(tempDir, 'status'), JSON.stringify(initStatus, null, 2), 'utf8');
+
+    // 按目标选择相关技能注入，避免泛化池全量注入（协议：doc/protocols/agent-pool.md）
+    seedRelevantSkillsToWorkDir(this.opts.obDir, workDir, goal, 5);
 
     // 构建启动命令（替换 --dir 参数）
     const cmd = this.buildCommand(workDir);
@@ -140,10 +149,15 @@ export class InnerBrainPool {
     const [prog, ...args] = cmd;
     if (!prog) throw new Error('launchCommandTemplate 为空');
 
+    const poolBrainDir = getAgentPoolBrainDir(this.opts.obDir);
     const child = spawn(prog, args, {
       cwd:      workDir,
       stdio:    'inherit',
       detached: false,
+      env:      {
+        ...process.env,
+        OPENKURONEKO_OB_SKILL_POOL: fs.existsSync(path.join(poolBrainDir, 'skills.md')) ? poolBrainDir : '',
+      },
     });
 
     if (child.pid) record.pid = child.pid;

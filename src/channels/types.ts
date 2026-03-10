@@ -201,4 +201,6 @@ export interface InnerBrainOutput {
   /** BLOCK 时向用户展示的问题 */
   question?: string | undefined;
   ts: string;
+  /** COMPLETE 时可选：要回传的文件路径列表（相对于 workDir），见 inner-brain-deliverables 协议 */
+  deliverables?: string[] | undefined;
 }

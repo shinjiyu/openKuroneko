@@ -30,6 +30,7 @@ import os from 'node:os';
 import { createLogger } from '../logger/index.js';
 import { createOpenAIAdapter } from '../adapter/index.js';
 import { createOuterBrain, InnerBrainPool } from '../outer-brain/index.js';
+import { mergeWorkDirSkillsToAgentPool } from '../outer-brain/agent-pool.js';
 import { resolveIdentity } from '../identity/index.js';
 import { loadConfig } from '../config/index.js';
 import { CliChannelAdapter } from '../channels/adapters/cli.js';
@@ -171,6 +172,7 @@ async function main() {
           event: 'inner-brain.exit',
           data: { id: inst.id, code: inst.exitCode, signal: inst.exitSignal },
         });
+        mergeWorkDirSkillsToAgentPool(obDir, inst.workDir, logger);
       },
     });
 

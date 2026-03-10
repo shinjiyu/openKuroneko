@@ -234,7 +234,7 @@ export function createController(ctx: ControllerContext, deps: ControllerDeps): 
         if (!activeMilestone) {
           // 没有 Active 里程碑，检查是否全部完成
           if (brain.allMilestonesCompleted()) {
-            await handleAllCompleted(brain, ioRegistry, memory, mem0, agentId, logger, knowledgeStore, workDir);
+            await handleAllCompleted(brain, ioRegistry, memory, mem0, agentId, tempDir, logger, knowledgeStore, workDir);
           } else {
             // 里程碑为空 → 重新规划
             state.replanReason = '没有 Active 里程碑，需要重新规划';
@@ -321,7 +321,7 @@ export function createController(ctx: ControllerContext, deps: ControllerDeps): 
               brain.writeState(state);
               logger.info('controller', { event: 'milestone.next', data: { completedId: execCtx.activeMilestone.id } });
             } else {
-              await handleAllCompleted(brain, ioRegistry, memory, mem0, agentId, logger, knowledgeStore, workDir);
+              await handleAllCompleted(brain, ioRegistry, memory, mem0, agentId, tempDir, logger, knowledgeStore, workDir);
             }
             break;
           }
@@ -484,6 +484,7 @@ async function handleAllCompleted(
   memory: MemoryLayer2,
   mem0: Mem0Client,
   agentId: string,
+  tempDir: string,
   logger: Logger,
   knowledgeStore?: KnowledgeStore,
   workDir?: string,
@@ -502,7 +503,18 @@ async function handleAllCompleted(
     milestones,
   ].join('\n');
 
-  await writeCompleteOutput(ioRegistry, reportText, goalOriginUser, logger);
+  let deliverables: string[] | undefined;
+  const deliverablesPath = path.join(tempDir, 'deliverables.json');
+  try {
+    if (fs.existsSync(deliverablesPath)) {
+      const raw = fs.readFileSync(deliverablesPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      deliverables = Array.isArray(parsed) ? parsed.filter((x: unknown) => typeof x === 'string') : undefined;
+      fs.unlinkSync(deliverablesPath);
+    }
+  } catch { /* ignore */ }
+
+  await writeCompleteOutput(ioRegistry, reportText, goalOriginUser, logger, deliverables);
   memory.appendDailyLog(`[完成] 目标达成，输出报告`);
   await safeMem0Add(mem0, `目标已完成: ${goal.slice(0, 200)}`, agentId, logger);
 
@@ -595,19 +607,23 @@ async function writeProgressOutput(
 
 /**
  * 写入结构化 COMPLETE 输出（JSON），供外脑 push-loop 解析。
+ * deliverables 为可选，相对于 workDir 的路径列表（见 inner-brain-deliverables 协议）。
  */
 async function writeCompleteOutput(
   ioRegistry: IORegistry,
   message: string,
   targetUser: string | null,
   logger: Logger,
+  deliverables?: string[],
 ): Promise<void> {
-  const output = JSON.stringify({
+  const payload: Record<string, unknown> = {
     type:        'COMPLETE',
     message,
     target_user: targetUser ?? undefined,
     ts:          new Date().toISOString(),
-  });
+  };
+  if (deliverables && deliverables.length > 0) payload.deliverables = deliverables;
+  const output = JSON.stringify(payload);
   await writeOutput(ioRegistry, output, logger);
 }
 

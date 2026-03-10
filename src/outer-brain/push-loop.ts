@@ -100,13 +100,14 @@ export class PushLoop {
   private async tick(): Promise<void> {
     const instances = this.opts.pool.runningInstances();
     for (const inst of instances) {
-      await this.tickInstance(inst.id, inst.tempDir, inst.originUser);
+      await this.tickInstance(inst.id, inst.tempDir, inst.workDir, inst.originUser);
     }
   }
 
   private async tickInstance(
     instanceId: string,
     tempDir:    string,
+    workDir:    string,
     originUser: string,
   ): Promise<void> {
     const outputFile = path.join(tempDir, 'output');
@@ -133,7 +134,7 @@ export class PushLoop {
 
       switch (parsed.type) {
         case 'BLOCK':    await this.handleBlock(instanceId, tempDir, parsed, originUser);    break;
-        case 'COMPLETE': await this.handleComplete(instanceId, tempDir, parsed, originUser); break;
+        case 'COMPLETE': await this.handleComplete(instanceId, workDir, tempDir, parsed, originUser); break;
         case 'PROGRESS': await this.handleProgress(parsed);                                  break;
       }
     }
@@ -188,12 +189,13 @@ export class PushLoop {
   private async handleComplete(
     instanceId: string,
     workDir:    string,
+    tempDir:    string,
     output:     InnerBrainOutput,
     originUser: string,
   ): Promise<void> {
     const { logger } = this.opts;
     const targetUser   = output.target_user ?? originUser;
-    const originThread = this.getGoalOriginThread(workDir);
+    const originThread = this.getGoalOriginThread(tempDir);
     if (!targetUser) {
       logger.warn('push-loop', { event: 'complete.no_target', data: {} });
       return;
@@ -208,8 +210,14 @@ export class PushLoop {
       return;
     }
 
-    // 扫描工作目录中的产出文件（非 .brain/ 内部文件）
-    const outputFiles = listWorkDirFiles(workDir);
+    // 产物列表：内脑显式登记的 deliverables 优先，否则扫描工作目录（协议：inner-brain-deliverables）
+    const outputFiles =
+      output.deliverables && output.deliverables.length > 0
+        ? output.deliverables.filter((rel) => {
+            const abs = path.join(workDir, path.normalize(rel).replace(/\\/g, '/'));
+            return abs.startsWith(workDir) && fs.existsSync(abs) && fs.statSync(abs).isFile();
+          })
+        : listWorkDirFiles(workDir);
 
     // 将产出文件转为附件（超过大小限制或数量上限的改为仅列文字路径）
     const attachments: MessageAttachment[] = [];
@@ -402,13 +410,17 @@ function parseSingleLine(line: string): InnerBrainOutput {
   try {
     const obj = JSON.parse(line) as Partial<InnerBrainOutput>;
     if (obj.type && obj.message) {
-      return {
+      const out: InnerBrainOutput = {
         type:        obj.type,
         message:     obj.message,
         target_user: obj.target_user,
         question:    obj.question,
         ts:          obj.ts ?? new Date().toISOString(),
       };
+      if (obj.type === 'COMPLETE' && Array.isArray(obj.deliverables)) {
+        out.deliverables = obj.deliverables.filter((x): x is string => typeof x === 'string');
+      }
+      return out;
     }
   } catch { /* not JSON */ }
 
