@@ -149,11 +149,15 @@ export class InnerBrainPool {
     const [prog, ...args] = cmd;
     if (!prog) throw new Error('launchCommandTemplate 为空');
 
+    // Windows: 直接 spawn .cmd/.bat 会触发 EINVAL（Node 安全策略 CVE-2024-27980），必须传 shell: true
+    const isWinBatch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(prog);
+
     const poolBrainDir = getAgentPoolBrainDir(this.opts.obDir);
     const child = spawn(prog, args, {
       cwd:      workDir,
       stdio:    'inherit',
       detached: false,
+      ...(isWinBatch ? { shell: true } : {}),
       env:      {
         ...process.env,
         OPENKURONEKO_OB_SKILL_POOL: fs.existsSync(path.join(poolBrainDir, 'skills.md')) ? poolBrainDir : '',
