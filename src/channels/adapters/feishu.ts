@@ -61,10 +61,8 @@ import type { ChannelAdapter, InboundMessage, OutboundMessage, MessageAttachment
 export interface RelayBroadcastIngestOptions {
   /** 发送方展示名（如机器人名），用于 UserStore 与对话中的发言人显示 */
   sender_name?: string;
-  /** 发送方 union_id（飞书跨应用一致），便于身份映射 */
+  /** 发送方 union_id（飞书跨应用一致）；接收方用本机 feishu-openid-map 按 union_id 解析 open_id 补全结构 */
   sender_union_id?: string;
-  /** 发送方 open_id（本应用下），便于身份映射 */
-  sender_open_id?: string;
 }
 export interface RelayIngestRef {
   current: ((
@@ -182,7 +180,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     let peerId  = parts.slice(2).join(':');
     const isGroup = type === 'group';
 
-    // DM 时 peerId 可能为 union_id（on_xxx），需解析为本应用 open_id 再调 API
+    // DM 时 peerId 可能为 union_id（on_xxx），需解析为本应用 open_id 再调 API（发私信必须用 open_id）
     let receiveIdType: 'chat_id' | 'open_id' | 'union_id' = type === 'group' ? 'chat_id' : 'open_id';
     if (!isGroup && peerId.startsWith('on_') && this.opts.getOpenIdForUnionId) {
       const openId = this.opts.getOpenIdForUnionId(peerId);
@@ -311,7 +309,6 @@ export class FeishuChannelAdapter implements ChannelAdapter {
             ts:                    Date.now(),
             sender_display_name:   this._botDisplayName ?? this.opts.relayAgentId ?? undefined,
             sender_union_id:       this.opts.agentUnionId ?? undefined,
-            sender_open_id:        this._botOpenId ?? undefined,
           }));
           this.opts.relayLogger?.info('feishu', { event: 'relay.speak', data: { thread_id: msg.thread_id, preview: (msg.content ?? '').slice(0, 60) } });
         } catch (e) {
@@ -384,7 +381,6 @@ export class FeishuChannelAdapter implements ChannelAdapter {
           const opts: RelayBroadcastIngestOptions = {};
           if (typeof data.sender_display_name === 'string') opts.sender_name = data.sender_display_name;
           if (typeof data.sender_union_id === 'string') opts.sender_union_id = data.sender_union_id;
-          if (typeof data.sender_open_id === 'string') opts.sender_open_id = data.sender_open_id;
           relayIngestRef?.current?.(threadId, userId, content, ts, Object.keys(opts).length > 0 ? opts : undefined);
           console.log(`[relay] 收到广播 来自=${userId}${opts.sender_name ? ` (${opts.sender_name})` : ''} thread=${threadId} preview=${content.slice(0, 40)}...`);
           relayLogger?.debug('feishu', { event: 'relay.broadcast_ingest', data: { thread_id: threadId, sender: userId, sender_name: opts.sender_name, preview: content.slice(0, 50) } });

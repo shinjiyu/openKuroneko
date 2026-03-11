@@ -103,15 +103,15 @@ wss.on('connection', (ws, req) => {
         message_id?: string;
         sender_display_name?: string;
         sender_union_id?: string;
-        sender_open_id?: string;
       };
-      const { thread_id, content, ts, message_id, sender_display_name, sender_union_id, sender_open_id } = body;
+      const { thread_id, content, ts, message_id, sender_display_name, sender_union_id } = body;
       if (!thread_id || content === undefined) {
         console.log(`[relay] speak ignored agent_id=${agentId} (missing thread_id or content)`);
         return;
       }
       const peerIds = connectionIds().filter((id) => id !== agentId);
       console.log(`[relay] speak agent_id=${agentId} thread_id=${thread_id} peers=[${peerIds.join(', ')}]`);
+      // 只转发 union_id + 展示名，不转发 open_id（open_id 为应用维度，接收方用本机 union_id→open_id 映射补全）
       const payload: Record<string, unknown> = {
         type:             'broadcast',
         thread_id,
@@ -122,7 +122,6 @@ wss.on('connection', (ws, req) => {
       };
       if (sender_display_name != null) payload.sender_display_name = sender_display_name;
       if (sender_union_id != null) payload.sender_union_id = sender_union_id;
-      if (sender_open_id != null) payload.sender_open_id = sender_open_id;
       const sent = broadcast(agentId, payload);
       console.log(`[relay] speak done agent_id=${agentId} sent_to=${sent} peers`);
     } else {

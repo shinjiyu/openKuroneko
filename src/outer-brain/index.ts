@@ -78,11 +78,10 @@ export interface OuterBrainOptions {
 
 export { InnerBrainPool };
 
-/** 中转广播 ingest 时的可选信息（与 RelayBroadcastIngestOptions 一致） */
+/** 中转广播 ingest 时的可选信息（与 RelayBroadcastIngestOptions 一致；仅 union_id，open_id 由接收方本机映射补全） */
 export interface RelayIngestOptions {
   sender_name?: string;
   sender_union_id?: string;
-  sender_open_id?: string;
 }
 
 export interface OuterBrain {
