@@ -340,32 +340,31 @@ async function main() {
   // 详见 doc/designs/中转消息ID与身份映射分析.md
   relayIngestRef.current = (threadId, userId, content, ts, ingestOpts) => {
     ob.threadStore.ensureThread(threadId, 'feishu', ts);
-    // 与飞书原生约定一致：user_id 统一为 feishu_on_xxx，sender_agent_id 来自中转多为 on_xxx
+    // 与飞书原生约定一致：user_id 统一为 feishu_on_xxx；有 sender_union_id 时优先用其推导，避免 sender_agent_id 为 "blackcat" 等导致与 resolveUser 结果不一致
+    const unionId = ingestOpts?.sender_union_id?.trim();
+    const fromUnionId = unionId && (unionId.startsWith('on_') || unionId.startsWith('ou_'))
+      ? `feishu_${unionId}`
+      : null;
     const normalizedUserId =
       typeof userId === 'string' && userId.startsWith('on_') && !userId.startsWith('feishu_')
         ? `feishu_${userId}`
         : userId;
+    const canonicalUserId = fromUnionId ?? normalizedUserId;
     if (ingestOpts?.sender_name) {
       const channels: Array<{ channelId: string; rawId: string }> = [];
-      // 仅用 union_id 作为 raw_id，不把 sender_open_id 加入（该 open_id 属于发言者应用，本应用使用会 99992361）
-      if (ingestOpts.sender_union_id?.trim()) channels.push({ channelId: 'feishu', rawId: ingestOpts.sender_union_id.trim() });
+      if (unionId) channels.push({ channelId: 'feishu', rawId: unionId });
       ob.userStore.register({
-        userId:      normalizedUserId,
+        userId:      canonicalUserId,
         displayName: ingestOpts.sender_name,
         role:        'member',
-        channels:    channels.length ? channels : [{ channelId: 'feishu', rawId: normalizedUserId.replace(/^feishu_/, '') }],
+        channels:    channels.length ? channels : [{ channelId: 'feishu', rawId: canonicalUserId.replace(/^feishu_/, '') }],
       });
+    } else if (unionId) {
+      ob.userStore.resolveUser(unionId, 'feishu', true);
     }
     // 不把中转带来的 sender_open_id merge 进本机 feishu-openid-map（跨应用 open_id 会污染本应用映射）
-    if (feishuOpenIdMap && ingestOpts?.sender_union_id?.trim() && ingestOpts?.sender_name?.trim()) {
-      // 仅用 union_id + name 更新展示名（本应用下该 union_id 的 open_id 由飞书原生事件写入）
-      feishuOpenIdMap.mergeByUnionId(ingestOpts.sender_union_id.trim(), ingestOpts.sender_name.trim());
-    }
-    // 写入历史时使用与 userStore 一致的规范 user_id（feishu_on_xxx）
-    let canonicalUserId = normalizedUserId;
-    if (ingestOpts?.sender_union_id?.trim()) {
-      const resolved = ob.userStore.resolveUser(ingestOpts.sender_union_id.trim(), 'feishu', true);
-      if (resolved) canonicalUserId = resolved;
+    if (feishuOpenIdMap && unionId && ingestOpts?.sender_name?.trim()) {
+      feishuOpenIdMap.mergeByUnionId(unionId, ingestOpts.sender_name.trim());
     }
     const history = ob.threadStore.getHistory(threadId);
     const last = history[history.length - 1];
