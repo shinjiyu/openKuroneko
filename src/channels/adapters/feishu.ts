@@ -721,8 +721,12 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       (openId, fallback) => nameByOpenId.get(openId) ?? this.opts.getFeishuDisplayName?.(openId) ?? fallback ?? openId,
     );
 
+    // 发送方展示名：优先用本事件内已解析的 idEntries[0].name（含 contact API 结果），再回退 map，避免普通用户首条消息 sender_name 为空
+    const senderEntry = idEntries[0];
     const senderName =
-      this.opts.getFeishuDisplayName?.(canonicalSenderId) ?? undefined;
+      (senderEntry?.name?.trim()) ??
+      this.opts.getFeishuDisplayName?.(canonicalSenderId) ??
+      undefined;
 
     if (this.opts.logger) {
       this.opts.logger.info('feishu', {
