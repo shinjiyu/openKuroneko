@@ -70,8 +70,10 @@
 
 **广播（其它 agent 的发言）**
 
+中转对 speak 做**整包透传**：把 speak 消息里除 `type` 外的所有字段原样带上，仅注入 `type: 'broadcast'` 与 `sender_agent_id`。因此协议新增字段（如 `mentions`）只需客户端与文档更新，**无需改中转服务**。
+
 ```json
-{ "type": "broadcast", "thread_id": "feishu:group:oc_xxx", "sender_agent_id": "<agent_id>", "content": "...", "ts": 1734567890123, "message_id": "optional" }
+{ "type": "broadcast", "sender_agent_id": "<agent_id>", "thread_id": "...", "content": "...", "ts": ..., ... /* speak 中其它字段原样 */ }
 ```
 
 ---
@@ -79,8 +81,8 @@
 ## 4. 语义约定
 
 - 服务器收到 `register`：校验 key，将当前连接与 `agent_id` 绑定，回复 `registered` 或 `error`。
-- 服务器收到 `speak`：向**除发言人外**所有已注册连接发送 `broadcast`；发言人自己也可不发（或发也可，插件可忽略自己 agent_id 的 broadcast）。
-- 客户端收到 `broadcast`：调用本机「插入群聊记录」逻辑（仅追加，不触发回复）；可用 `message_id` 或 `(thread_id, sender_agent_id, ts)` 做幂等。
+- 服务器收到 `speak`：校验必有 `thread_id` 与 `content`，然后向**除发言人外**所有已注册连接发送 `broadcast`；broadcast 内容 = speak 整包（去掉 `type`）+ `type: 'broadcast'` + `sender_agent_id`，不做字段白名单，新增字段自动透传。
+- 客户端收到 `broadcast`：按需读取已知字段（如 thread_id、content、sender_agent_id、sender_union_id、mentions 等），忽略未知字段；调用本机「插入群聊记录」逻辑（仅追加，不触发回复）；可用 `message_id` 或 `(thread_id, sender_agent_id, ts)` 做幂等。
 
 ---
 

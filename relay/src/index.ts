@@ -96,32 +96,18 @@ wss.on('connection', (ws, req) => {
     }
 
     if (type === 'speak') {
-      const body = msg as {
-        thread_id?: string;
-        content?: string;
-        ts?: number;
-        message_id?: string;
-        sender_display_name?: string;
-        sender_union_id?: string;
-      };
-      const { thread_id, content, ts, message_id, sender_display_name, sender_union_id } = body;
+      const body = msg as Record<string, unknown>;
+      const thread_id = body.thread_id;
+      const content = body.content;
       if (!thread_id || content === undefined) {
         console.log(`[relay] speak ignored agent_id=${agentId} (missing thread_id or content)`);
         return;
       }
       const peerIds = connectionIds().filter((id) => id !== agentId);
       console.log(`[relay] speak agent_id=${agentId} thread_id=${thread_id} peers=[${peerIds.join(', ')}]`);
-      // 只转发 union_id + 展示名，不转发 open_id（open_id 为应用维度，接收方用本机 union_id→open_id 映射补全）
-      const payload: Record<string, unknown> = {
-        type:             'broadcast',
-        thread_id,
-        sender_agent_id:  agentId,
-        content:          content ?? '',
-        ts:               typeof ts === 'number' ? ts : Date.now(),
-        message_id:       message_id ?? undefined,
-      };
-      if (sender_display_name != null) payload.sender_display_name = sender_display_name;
-      if (sender_union_id != null) payload.sender_union_id = sender_union_id;
+      // 整包透传：body 中除 type 外全部原样广播，仅注入 type + sender_agent_id，后续协议增字段无需改中转
+      const { type: _t, ...rest } = body;
+      const payload: Record<string, unknown> = { type: 'broadcast', sender_agent_id: agentId, ...rest };
       const sent = broadcast(agentId, payload);
       console.log(`[relay] speak done agent_id=${agentId} sent_to=${sent} peers`);
     } else {

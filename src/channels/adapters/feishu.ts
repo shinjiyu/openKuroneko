@@ -313,7 +313,14 @@ export class FeishuChannelAdapter implements ChannelAdapter {
             sender_display_name:   this._botDisplayName ?? this.opts.relayAgentId ?? undefined,
             sender_union_id:       this.opts.agentUnionId ?? undefined,
           }));
-          this.opts.relayLogger?.info('feishu', { event: 'relay.speak', data: { thread_id: msg.thread_id, preview: (msg.content ?? '').slice(0, 60) } });
+          this.opts.relayLogger?.info('feishu', {
+            event: 'relay.speak',
+            data: {
+              thread_id:   msg.thread_id,
+              content_len: relayContent.length,
+              preview:     relayContent.slice(0, 60),
+            },
+          });
         } catch (e) {
           this.opts.relayLogger?.warn('feishu', { event: 'relay.speak_error', data: { thread_id: msg.thread_id, error: String(e) } });
         }
@@ -684,10 +691,24 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     const mentionOpenIds  = rawMentions.map((m) => getIdParts(m.id).openId);
     const mentionUnionIds = rawMentions.map((m) => getIdParts(m.id).unionId).filter(Boolean) as string[];
     const mentionAppIds   = rawMentions.map((m) => getIdParts(m.id).appId).filter(Boolean) as string[];
-    const isMention =
+    let isMention =
       (botAppId !== '' && mentionAppIds.some((aid) => aid === botAppId)) ||
       (botOpenId !== '' && mentionOpenIds.some((oid) => oid === botOpenId)) ||
       (botUnionId !== '' && mentionUnionIds.some((uid) => uid === botUnionId));
+
+    // 兜底：飞书有时 @ 机器人未写入 mentions（如未从选择器选中、或仅输入 @ 名字），用正文是否含 @<本机展示名> 判定
+    if (isGroup && !isMention && content.includes('@')) {
+      const botName = (this._botDisplayName ?? this.opts.getFeishuDisplayName?.(botUnionId || '') ?? '').trim();
+      if (botName && new RegExp(`@\\s*${escapeRegex(botName)}`, 'i').test(content)) {
+        isMention = true;
+        if (this.opts.logger) {
+          this.opts.logger.info('feishu', {
+            event: 'mention.eval.fallback',
+            data: { thread_id: threadId, reason: 'content_has_at_bot_name', bot_name: botName, preview: content.slice(0, 80) },
+          });
+        }
+      }
+    }
 
     if (isGroup && rawMentions.length > 0 && this.opts.logger) {
       this.opts.logger.info('feishu', {
@@ -700,6 +721,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
           mention_app_ids:  mentionAppIds,
           mention_open_ids: mentionOpenIds,
           mention_union_ids: mentionUnionIds,
+          mention_ids_raw:  rawMentions.map((m) => m.id),
           is_mention:       isMention,
           preview:          content.slice(0, 60),
         },
