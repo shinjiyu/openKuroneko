@@ -304,12 +304,13 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     }
 
     // 群消息发送成功后，把「本条消息的完整结构」原样转发给 relay（与发给飞书的逻辑一一对应，不手挑字段避免遗漏）
+    // 注意：mentions 从带 <at user_id="..."> 的 outText 提取，不能用 msg.content（LLM 原始可能是 @名字，无 user_id）
     const relayReady = this.opts.relayUrl && this.opts.relayKey && this.opts.relayAgentId && this.relayWs?.readyState === 1;
     if (isGroup && this.opts.relayUrl && this.opts.relayKey && this.opts.relayAgentId) {
       if (relayReady) {
         try {
-          const relayContent = this.replaceOpenIdWithUnionIdInContent(msg.content ?? '');
-          const mentionUnionIds = this.extractUnionIdsFromContentForRelay(msg.content ?? '', relayContent);
+          const relayContent = this.replaceOpenIdWithUnionIdInContent(outText);
+          const mentionUnionIds = this.extractUnionIdsFromContentForRelay(outText, relayContent);
           const speakPayload: Record<string, unknown> = {
             type:                   'speak',
             thread_id:              msg.thread_id,
