@@ -275,6 +275,7 @@ async function main() {
       },
       getFeishuDisplayName: (id) => feishuOpenIdMap?.getDisplayName(id),
       getOpenIdForUnionId: (uid) => feishuOpenIdMap?.getOpenIdForUnionId(uid) ?? null,
+      getUnionIdForOpenId: (openId) => feishuOpenIdMap?.getUnionId(openId),
       getOpenIdForDisplayName: (name) => feishuOpenIdMap?.getOpenIdByDisplayName(name),
       logger,
       resolveUserFn: (rawId, channelId) => {
@@ -366,17 +367,34 @@ async function main() {
     if (feishuOpenIdMap && unionId && ingestOpts?.sender_name?.trim()) {
       feishuOpenIdMap.mergeByUnionId(unionId, ingestOpts.sender_name.trim());
     }
+    // 接收端还原：content 中 at 标签的 user_id="on_xxx"（union_id）反查为本应用 open_id，便于本机展示与 @ 解析，见 doc/protocols/message-relay.md
+    const contentRestored =
+      feishuOpenIdMap != null
+        ? content.replace(/user_id=["'](on_[a-zA-Z0-9_-]+)["']/g, (_, uid: string) => {
+            const openId = feishuOpenIdMap!.getOpenIdForUnionId(uid);
+            return openId != null ? `user_id="${openId}"` : `user_id="${uid}"`;
+          })
+        : content;
     const history = ob.threadStore.getHistory(threadId);
     const last = history[history.length - 1];
     const likelyDuplicate =
       last?.role === 'user' &&
       last.user_id === canonicalUserId &&
-      last.content === content &&
+      last.content === contentRestored &&
       Math.abs((last.ts ?? 0) - ts) < 15_000;
-    if (!likelyDuplicate) {
-      ob.threadStore.appendUser(threadId, canonicalUserId, content, ts);
+    if (likelyDuplicate) {
+      logger.info('outer-brain', {
+        event: 'relay.ingest.skip_duplicate',
+        data: { thread: threadId, from: canonicalUserId, preview: contentRestored.slice(0, 50) },
+      });
+    } else {
+      ob.threadStore.appendUser(threadId, canonicalUserId, contentRestored, ts);
+      logger.info('outer-brain', {
+        event: 'relay.ingest.append',
+        data: { thread: threadId, from: canonicalUserId, preview: contentRestored.slice(0, 50) },
+      });
     }
-    ob.onRelayMessageIngested(threadId, canonicalUserId, content, ts, ingestOpts);
+    ob.onRelayMessageIngested(threadId, canonicalUserId, contentRestored, ts, ingestOpts);
   };
 
   // ── 信号处理 ──────────────────────────────────────────────────────────────

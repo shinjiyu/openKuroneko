@@ -87,6 +87,8 @@ export interface FeishuAdapterOptions {
   resolveUserFn: (rawUserId: string, channelId: string) => string | null;
   /** 用 union_id 查本应用下 open_id（DM 发消息时需将 thread 的 union_id 解析为 open_id） */
   getOpenIdForUnionId?: (unionId: string) => string | null;
+  /** 用 open_id 查 union_id（relay speak 时把 content 里 at 标签的 open_id 换成 union_id，便于接收端跨应用还原） */
+  getUnionIdForOpenId?: (openId: string) => string | undefined;
   /** 收到事件后合并 open_id/union_id/name 到映射表（用于维护 union_id↔open_id） */
   onFeishuIdsSeen?: (entries: Array<{ openId: string; unionId?: string; name?: string }>) => void;
   /** 按 open_id 或 union_id 查展示名（用于入站消息的 sender_name，由 FeishuOpenIdMap.getDisplayName 提供） */
@@ -297,15 +299,16 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       });
     }
 
-    // 群消息发送成功后向中转上报，供其它 agent 插入群聊记录
+    // 群消息发送成功后向中转上报，供其它 agent 插入群聊记录；content 中 at 标签的 open_id 需换成 union_id，接收端再反查还原
     const relayReady = this.opts.relayUrl && this.opts.relayKey && this.opts.relayAgentId && this.relayWs?.readyState === 1;
     if (isGroup && this.opts.relayUrl && this.opts.relayKey && this.opts.relayAgentId) {
       if (relayReady) {
         try {
+          const relayContent = this.replaceOpenIdWithUnionIdInContent(msg.content ?? '');
           this.relayWs!.send(JSON.stringify({
             type:                  'speak',
             thread_id:             msg.thread_id,
-            content:               msg.content,
+            content:               relayContent,
             ts:                    Date.now(),
             sender_display_name:   this._botDisplayName ?? this.opts.relayAgentId ?? undefined,
             sender_union_id:       this.opts.agentUnionId ?? undefined,
@@ -321,6 +324,19 @@ export class FeishuChannelAdapter implements ChannelAdapter {
         });
       }
     }
+  }
+
+  /**
+   * 将 content 中 at 标签的 user_id="ou_xxx"（本应用 open_id）替换为 user_id="on_yyy"（union_id），
+   * 便于中转接收端按 union_id 反查本机 open_id 还原。见 doc/protocols/message-relay.md
+   */
+  private replaceOpenIdWithUnionIdInContent(content: string): string {
+    const fn = this.opts.getUnionIdForOpenId;
+    if (!fn) return content;
+    return content.replace(/user_id=["'](ou_[a-zA-Z0-9_-]+)["']/g, (_, openId: string) => {
+      const unionId = fn(openId);
+      return unionId != null ? `user_id="${unionId}"` : `user_id="${openId}"`;
+    });
   }
 
   resolveUser(rawUserId: string, channelId: string): string | null {

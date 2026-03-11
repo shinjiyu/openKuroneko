@@ -36,11 +36,23 @@
 **发言上报**
 
 ```json
-{ "type": "speak", "thread_id": "feishu:group:oc_xxx", "content": "...", "ts": 1734567890123, "message_id": "optional_id" }
+{
+  "type": "speak",
+  "thread_id": "feishu:group:oc_xxx",
+  "content": "<完整消息正文，勿截断>",
+  "ts": 1734567890123,
+  "message_id": "optional_id",
+  "sender_display_name": "可选，展示名",
+  "sender_union_id": "可选，飞书 union_id"
+}
 ```
 
 - `thread_id`：与飞书 thread_id 一致（`<channel>:<type>:<平台原生ID>`）。
+- **`content`**：**必须为完整消息正文**（与发到飞书群的内容一致）。禁止只传 preview/摘要/前 N 字，否则接收方会看到被截断的消息。
+- 若消息中含 @ 提及，应把 **完整可读文本**（含 at 标签）放在 `content` 中，不要省略。
+- **open_id 与 union_id**：`content` 中的 at 标签（如 `<at user_id="ou_xxx">名字</at>`）**发送前应把本应用 open_id 换成 union_id**（如 `user_id="on_yyy"`），因为 open_id 是应用维度，其它 agent 无法解析；接收端收到后**反查本机 open_id 并还原**到 content，再写入 thread。
 - `message_id`：可选，用于去重。
+- `sender_display_name` / `sender_union_id`：推荐带上，便于接收方正确显示发言人。
 
 ### 3.2 服务器 → 客户端
 
@@ -76,3 +88,13 @@
 
 - key 错误：服务器回复 `{ "type": "error", "message": "invalid key" }` 后关闭连接。
 - 连接断开：客户端应重连并重新 `register`；服务器侧将断开的连接从注册表移除。
+
+---
+
+## 6. 实现要点与常见错误
+
+- **speak 的 content 必须为完整正文**：与发到飞书群的那条消息的完整文本一致。若只传预览，接收方会只看到截断内容。
+- **@ / mention 信息**：应包含在 `content` 中，不要只传无 mention 的摘要。
+- **open_id → union_id（发送端）**：上报前将 content 里 at 标签中的 `user_id="ou_xxx"`（本应用 open_id）替换为 `user_id="on_yyy"`（对应 union_id），以便其它应用能识别同一人。
+- **union_id → open_id（接收端）**：收到 broadcast 后，将 content 里 at 标签中的 `user_id="on_xxx"` 反查本机 feishu-openid-map，替换为本应用 open_id 再写入 thread，便于本机展示与 @ 解析。
+- 发送 speak 的时机：在**群消息已成功发送到飞书**之后，用**替换过 open_id→union_id 的**完整 content 上报给中转。
