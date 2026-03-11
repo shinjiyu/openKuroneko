@@ -389,13 +389,19 @@ function buildMessages(
   // 当前消息（支持多模态：图片附件转为 image_url content block）；有 sender_name 时用展示名便于区分谁在说话；有引用时带上被引用内容
   const mention   = msg.is_mention ? '（@了你）' : '';
   const speaker   = msg.sender_name ?? msg.user_id;
-  const baseText  = `[${speaker}${mention}] ${msg.content}`;
-  const textPart  = msg.quoted_content
-    ? `[回复自: ${msg.quoted_content}]\n\n${baseText}`
-    : baseText;
+  let baseText    = `[${speaker}${mention}] ${msg.content}`;
   const imageAtts = (msg.attachments ?? []).filter(
     (a) => a.type === 'image' && a.url && (a.url.startsWith('data:') || a.url.startsWith('http')),
   );
+  const imageUnresolved = (msg.attachments ?? []).filter(
+    (a) => a.type === 'image' && (!a.url || (!a.url.startsWith('data:') && !a.url.startsWith('http'))),
+  );
+  if (imageUnresolved.length > 0) {
+    baseText += `\n（本条含 ${imageUnresolved.length} 张图片，当前未能加载为可识别格式，请根据文字理解或提示用户重发）`;
+  }
+  const textPart = msg.quoted_content
+    ? `[回复自: ${msg.quoted_content}]\n\n${baseText}`
+    : baseText;
 
   if (imageAtts.length > 0) {
     const blocks: ContentBlock[] = [{ type: 'text', text: textPart }];

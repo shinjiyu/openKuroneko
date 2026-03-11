@@ -78,11 +78,10 @@ export interface OuterBrainOptions {
 
 export { InnerBrainPool };
 
-/** 中转广播 ingest 时的可选信息（与 RelayBroadcastIngestOptions 一致） */
+/** 中转广播 ingest 时的可选信息（与 RelayBroadcastIngestOptions 一致；仅 union_id，open_id 由接收方本机映射补全） */
 export interface RelayIngestOptions {
   sender_name?: string;
   sender_union_id?: string;
-  sender_open_id?: string;
 }
 
 export interface OuterBrain {
@@ -426,6 +425,11 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
         event: 'loop.error',
         data: { thread: msg.thread_id, error: String(e) },
       });
+      // #region agent log — 带图不回复时抓取 API/超时错误
+      if (typeof fetch !== 'undefined' && (msg.attachments?.some((a) => a.type === 'image') ?? false)) {
+        fetch('http://127.0.0.1:7785/ingest/d572a1ed-243c-4a7d-85e3-c51a2c7aed1a', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7d0410' }, body: JSON.stringify({ sessionId: '7d0410', hypothesisId: 'loop_error_with_image', location: 'outer-brain/index.ts:runConversation', message: 'loop.error when message had image', data: { error: String(e), thread: msg.thread_id }, timestamp: Date.now() }) }).catch(() => {});
+      }
+      // #endregion
     }
   }
 

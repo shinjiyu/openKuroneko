@@ -4,15 +4,16 @@
  * 用途：
  * 1. 从 sdk.raw_receive 的 sender / mentions 中抽取 (open_id, name, union_id)，建立 open_id → 展示名
  * 2. 多 agent 场景：同一人在不同机器人下 open_id 不同，union_id 跨应用一致，用 union_id 表示「同一人」
+ * 3. lastSeenAt：该 open_id 最近一次出现在事件中的时间戳，用于 getOpenIdForUnionId 时优先返回「当前应用」的 open_id，避免 open_id cross app
  *
  * 文件格式：<obDir>/feishu-openid-map.json
- *   { "ou_xxx": { "name": "张三", "union_id": "on_yyy" }, ... }
+ *   { "ou_xxx": { "name": "张三", "union_id": "on_yyy", "lastSeenAt": 1234567890 }, ... }
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 
-export type FeishuIdEntry = { name?: string; union_id?: string };
+export type FeishuIdEntry = { name?: string; union_id?: string; lastSeenAt?: number };
 
 export class FeishuOpenIdMap {
   private readonly filePath: string;
@@ -41,19 +42,41 @@ export class FeishuOpenIdMap {
   /**
    * 合并一批从飞书事件中解析出的 (open_id, name?, union_id?)。
    * 已有条目只做补充（不覆盖已有 name/union_id 为空的新值）。
+   * 每次合并都会更新该 open_id 的 lastSeenAt，便于 getOpenIdForUnionId 优先返回当前应用下的 open_id。
    */
   merge(entries: Array<{ openId: string; unionId?: string; name?: string }>): void {
+    const now = Date.now();
     let changed = false;
     for (const e of entries) {
       const key = e.openId?.trim();
       if (!key) continue;
       const cur = this.map.get(key) ?? {};
-      const next: FeishuIdEntry = { ...cur };
+      const next: FeishuIdEntry = { ...cur, lastSeenAt: now };
       if (e.name?.trim()) next.name = next.name || e.name.trim();
       if (e.unionId?.trim()) next.union_id = next.union_id || e.unionId.trim();
       const prev = this.map.get(key);
-      if (!prev || prev.name !== next.name || prev.union_id !== next.union_id) {
+      if (!prev || prev.name !== next.name || prev.union_id !== next.union_id || (prev.lastSeenAt ?? 0) < now) {
         this.map.set(key, next);
+        changed = true;
+      }
+    }
+    if (changed) this.save();
+  }
+
+  /**
+   * 仅按 union_id 更新展示名（用于中转广播：只有 union_id + name，无 open_id，且不能把发言者应用的 open_id 写入本应用）。
+   * 只更新本 map 中已存在且 union_id 匹配的条目的 name；不新增条目。
+   */
+  mergeByUnionId(unionId: string, name: string): void {
+    const u = unionId.trim();
+    const n = name?.trim();
+    if (!u || !n) return;
+    let changed = false;
+    for (const [openId, entry] of this.map) {
+      if (entry.union_id !== u) continue;
+      const next = { ...entry, name: n };
+      if (entry.name !== n) {
+        this.map.set(openId, next);
         changed = true;
       }
     }
@@ -82,10 +105,25 @@ export class FeishuOpenIdMap {
     return list;
   }
 
-  /** 本应用下该 union_id 对应的一个 open_id（发 DM 时用），无则返回 null */
+  /**
+   * 本应用下该 union_id 对应的一个 open_id（发 DM 时用），无则返回 null。
+   * 同一用户在不同应用下会有多个 open_id，优先返回 lastSeenAt 最大的（最近一次在本实例事件中出现的），避免 open_id cross app。
+   */
   getOpenIdForUnionId(unionId: string): string | null {
     const ids = this.getOpenIdsByUnionId(unionId);
-    return ids[0] ?? null;
+    if (ids.length === 0) return null;
+    if (ids.length === 1) return ids[0]!;
+    let best = ids[0]!;
+    let bestAt = this.map.get(best)?.lastSeenAt ?? 0;
+    for (let i = 1; i < ids.length; i++) {
+      const oid = ids[i]!;
+      const at = this.map.get(oid)?.lastSeenAt ?? 0;
+      if (at > bestAt) {
+        best = oid;
+        bestAt = at;
+      }
+    }
+    return best;
   }
 
   /**

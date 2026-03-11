@@ -1,4 +1,4 @@
-import type { LLMAdapter, LLMResult, StreamChunk, Message } from './index.js';
+import type { LLMAdapter, LLMResult, StreamChunk, Message, ContentBlock } from './index.js';
 
 // ── OpenAI wire types ─────────────────────────────────────────────────────────
 
@@ -135,6 +135,26 @@ export function createOpenAIAdapter(options?: {
     Authorization: `Bearer ${apiKey}`,
   };
 
+  /** 请求中是否包含 user 消息的 image_url block（用于 400 时决定是否用纯文本重试） */
+  function hasImageInMessages(messages: Message[]): boolean {
+    return messages.some((m) => {
+      if (m.role !== 'user' || !Array.isArray(m.content)) return false;
+      return (m.content as ContentBlock[]).some((b) => b.type === 'image_url');
+    });
+  }
+
+  /** 将 user 消息中的 ContentBlock[] 压成纯文本（image_url → [图片]），用于接口不支持多模态时的降级重试 */
+  function flattenUserContentToText(messages: Message[]): Message[] {
+    return messages.map((m) => {
+      if (m.role !== 'user' || typeof m.content === 'string') return m;
+      const blocks = m.content as ContentBlock[];
+      const text = blocks
+        .map((b) => (b.type === 'text' ? b.text : '[图片]'))
+        .join('\n');
+      return { ...m, content: text };
+    });
+  }
+
   /**
    * 按 toolWireFormat 序列化消息：
    * - openai: assistant 带 tool_calls，tool 带 tool_call_id（OpenAI/Kimi 要求）
@@ -175,13 +195,24 @@ export function createOpenAIAdapter(options?: {
     tools?: object[],
     stream = false
   ): string {
+    const normalized = normalizeMessages(messages);
+    // #region agent log — 多模态：确认发往 API 的 user 消息是否带 image_url block
+    const lastUser = [...normalized].reverse().find((x: { role?: string }) => x.role === 'user');
+    const c = lastUser && typeof (lastUser as Message).content !== 'string' && Array.isArray((lastUser as Message).content)
+      ? (lastUser as Message).content as import('./index.js').ContentBlock[]
+      : null;
+    if (c) {
+      const blockTypes = c.map((b: { type: string }) => b.type);
+      fetch('http://127.0.0.1:7785/ingest/d572a1ed-243c-4a7d-85e3-c51a2c7aed1a', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7d0410' }, body: JSON.stringify({ sessionId: '7d0410', hypothesisId: 'LLM_multimodal', location: 'openai.ts:buildBody', message: 'user content blocks sent to API', data: { blockCount: c.length, blockTypes }, timestamp: Date.now() }) }).catch(() => {});
+    }
+    // #endregion
     const body: Record<string, unknown> = {
       model,
       stream,
       ...extraBody,
       messages: [
         { role: 'system', content: systemPrompt },
-        ...normalizeMessages(messages),
+        ...normalized,
       ],
     };
     if (tools && tools.length > 0) {
@@ -195,10 +226,11 @@ export function createOpenAIAdapter(options?: {
   }
 
   // ── Non-streaming chat ──────────────────────────────────────────────────────
-  async function chat(
+  async function doChat(
     systemPrompt: string,
     messages: Message[],
-    tools?: object[]
+    tools: object[] | undefined,
+    isVisionFallbackRetry: boolean,
   ): Promise<LLMResult> {
     const res = await fetchWithRetry(
       `${baseUrl}/chat/completions`,
@@ -241,6 +273,27 @@ export function createOpenAIAdapter(options?: {
     });
 
     return { content, toolCalls };
+  }
+
+  async function chat(
+    systemPrompt: string,
+    messages: Message[],
+    tools?: object[],
+  ): Promise<LLMResult> {
+    try {
+      return await doChat(systemPrompt, messages, tools, false);
+    } catch (e) {
+      const errMsg = String(e);
+      // 接口返回 400/1210 且请求含图时：用纯文本（图→[图片]）重试一次，避免带图不回复
+      if (
+        !errMsg.includes('400') ||
+        (!errMsg.includes('1210') && !errMsg.includes('参数有误')) ||
+        !hasImageInMessages(messages)
+      ) {
+        throw e;
+      }
+      return doChat(systemPrompt, flattenUserContentToText(messages), tools, true);
+    }
   }
 
   // ── Streaming chat (SSE) ────────────────────────────────────────────────────

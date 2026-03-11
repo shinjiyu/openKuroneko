@@ -61,10 +61,8 @@ import type { ChannelAdapter, InboundMessage, OutboundMessage, MessageAttachment
 export interface RelayBroadcastIngestOptions {
   /** 发送方展示名（如机器人名），用于 UserStore 与对话中的发言人显示 */
   sender_name?: string;
-  /** 发送方 union_id（飞书跨应用一致），便于身份映射 */
+  /** 发送方 union_id（飞书跨应用一致）；接收方用本机 feishu-openid-map 按 union_id 解析 open_id 补全结构 */
   sender_union_id?: string;
-  /** 发送方 open_id（本应用下），便于身份映射 */
-  sender_open_id?: string;
 }
 export interface RelayIngestRef {
   current: ((
@@ -182,7 +180,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     let peerId  = parts.slice(2).join(':');
     const isGroup = type === 'group';
 
-    // DM 时 peerId 可能为 union_id（on_xxx），需解析为本应用 open_id 再调 API
+    // DM 时 peerId 可能为 union_id（on_xxx），需解析为本应用 open_id 再调 API（发私信必须用 open_id）
     let receiveIdType: 'chat_id' | 'open_id' | 'union_id' = type === 'group' ? 'chat_id' : 'open_id';
     if (!isGroup && peerId.startsWith('on_') && this.opts.getOpenIdForUnionId) {
       const openId = this.opts.getOpenIdForUnionId(peerId);
@@ -311,7 +309,6 @@ export class FeishuChannelAdapter implements ChannelAdapter {
             ts:                    Date.now(),
             sender_display_name:   this._botDisplayName ?? this.opts.relayAgentId ?? undefined,
             sender_union_id:       this.opts.agentUnionId ?? undefined,
-            sender_open_id:        this._botOpenId ?? undefined,
           }));
           this.opts.relayLogger?.info('feishu', { event: 'relay.speak', data: { thread_id: msg.thread_id, preview: (msg.content ?? '').slice(0, 60) } });
         } catch (e) {
@@ -384,7 +381,6 @@ export class FeishuChannelAdapter implements ChannelAdapter {
           const opts: RelayBroadcastIngestOptions = {};
           if (typeof data.sender_display_name === 'string') opts.sender_name = data.sender_display_name;
           if (typeof data.sender_union_id === 'string') opts.sender_union_id = data.sender_union_id;
-          if (typeof data.sender_open_id === 'string') opts.sender_open_id = data.sender_open_id;
           relayIngestRef?.current?.(threadId, userId, content, ts, Object.keys(opts).length > 0 ? opts : undefined);
           console.log(`[relay] 收到广播 来自=${userId}${opts.sender_name ? ` (${opts.sender_name})` : ''} thread=${threadId} preview=${content.slice(0, 40)}...`);
           relayLogger?.debug('feishu', { event: 'relay.broadcast_ingest', data: { thread_id: threadId, sender: userId, sender_name: opts.sender_name, preview: content.slice(0, 50) } });
@@ -654,8 +650,8 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       rawMentions,
     );
 
-    // 图片类附件：立刻下载并转为 base64 data URL，方便 LLM 多模态直接消费
-    const attachments = await this.resolveAttachments(rawAttachments);
+    // 图片类附件：立刻下载并转为 base64 data URL，方便 LLM 多模态直接消费（用户发的图用「获取消息中的资源文件」接口）
+    const attachments = await this.resolveAttachments(rawAttachments, message.message_id);
 
     // @mention 解析：内部统一用 union_id（有则用，无则 open_id）
     const mentions = rawMentions.map((m) => {
@@ -860,27 +856,44 @@ export class FeishuChannelAdapter implements ChannelAdapter {
    * 转换为可直接被 LLM 消费的 data URL（图片）或本地可读路径（文件）。
    *
    * 仅处理图片类型；文件/音频保留原始 URL，由下游按需处理。
+   * 用户发送的图片必须用「获取消息中的资源文件」接口（传 messageId）；未传 messageId 时用旧接口（仅支持机器人自己上传的图）。
    */
-  private async resolveAttachments(attachments: MessageAttachment[]): Promise<MessageAttachment[]> {
+  private async resolveAttachments(attachments: MessageAttachment[], messageId?: string): Promise<MessageAttachment[]> {
     const results: MessageAttachment[] = [];
     for (const att of attachments) {
       if (att.type === 'image' && att.url?.startsWith('feishu-image://')) {
         const imageKey = att.url.slice('feishu-image://'.length);
         try {
-          const token  = await this.getToken();
-          const res    = await fetch(
-            `https://open.feishu.cn/open-apis/im/v1/images/${imageKey}?type=message`,
-            { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) },
-          );
+          const token = await this.getToken();
+          // 用户消息中的图片：用「获取消息中的资源文件」；机器人自己上传的图：用 /im/v1/images（需 messageId 为空）
+          const url = messageId
+            ? `https://open.feishu.cn/open-apis/im/v1/messages/${messageId}/resources/${imageKey}?type=image`
+            : `https://open.feishu.cn/open-apis/im/v1/images/${imageKey}?type=message`;
+          const res = await fetch(url, {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(15_000),
+          });
           if (res.ok) {
             const buf    = await res.arrayBuffer();
             const mime   = res.headers.get('content-type') ?? 'image/jpeg';
             const b64    = Buffer.from(buf).toString('base64');
             results.push({ ...att, url: `data:${mime};base64,${b64}` });
           } else {
-            results.push(att); // 下载失败时保留原始引用
+            if (this.opts.logger) {
+              this.opts.logger.info('feishu', {
+                event: 'image.resolve_failed',
+                data: { image_key: imageKey, message_id: messageId ?? null, status: res.status, reason: res.statusText },
+              });
+            }
+            results.push(att); // 下载失败时保留原始引用（下游无法用 feishu-image:// 多模态，仅作占位）
           }
-        } catch {
+        } catch (e) {
+          if (this.opts.logger) {
+            this.opts.logger.info('feishu', {
+              event: 'image.resolve_error',
+              data: { image_key: imageKey, message_id: messageId ?? null, error: String(e) },
+            });
+          }
           results.push(att);
         }
       } else {
@@ -1033,13 +1046,14 @@ function parseFeishuContent(
       }
 
       case 'post': {
-        // 富文本：提取 text；at 按顺序用 rawMentions[i].key 占位，便于 normalizeMentions 替换为 <at>显示名</at>
+        // 富文本：提取 text、at（占位）、img（image_key → 附件），供下游 resolveAttachments 转 data URL
         const zh = (obj['zh_cn'] ?? obj['en_us'] ?? obj) as {
           title?: string;
           content?: unknown[][];
         };
         let atIndex = 0;
         const lines: string[] = [];
+        const postAttachments: MessageAttachment[] = [];
         if (zh.title) lines.push(zh.title);
         for (const row of zh.content ?? []) {
           const rowText = (row as unknown[])
@@ -1053,12 +1067,17 @@ function parseFeishuContent(
                 atIndex++;
                 return '@';
               }
+              if (el['tag'] === 'img') {
+                const imageKey = el['image_key'] as string | undefined;
+                if (imageKey) postAttachments.push({ type: 'image', url: `feishu-image://${imageKey}`, name: imageKey });
+                return '[图片]';
+              }
               return '';
             })
             .join('');
           if (rowText) lines.push(rowText);
         }
-        return { content: lines.join('\n'), attachments: [] };
+        return { content: lines.join('\n'), attachments: postAttachments };
       }
 
       case 'sticker':

@@ -28,7 +28,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 
 import { createLogger } from '../logger/index.js';
-import { createOpenAIAdapter } from '../adapter/index.js';
+import { createOpenAIAdapter, createGLMAdapter } from '../adapter/index.js';
 import { createFilesystemStore } from '../archive/index.js';
 import { createOuterBrain, InnerBrainPool } from '../outer-brain/index.js';
 import { mergeWorkDirSkillsToAgentPool } from '../outer-brain/agent-pool.js';
@@ -135,14 +135,15 @@ async function main() {
   const innerIdentity = resolveIdentity(innerDir);
   const innerTempDir  = innerIdentity.tempDir;
   const config = loadConfig(innerTempDir);
-  // 外脑主 LLM：关闭 thinking。Kimi k2.5 用 thinking: { type: "disabled" }，否则 reasoning_content 会报错
+  // 外脑主 LLM：关闭 thinking。智谱用 GLM 适配器（含图时走 paas + 视觉模型），其它用 OpenAI 兼容适配器
   const baseUrl = process.env['OPENAI_BASE_URL'] ?? '';
   const noThinkingBody = baseUrl.includes('moonshot')
     ? { thinking: { type: 'disabled' as const } }
     : { enable_thinking: false };
-  const llm = createOpenAIAdapter(
-    config.model ? { model: config.model, extraBody: noThinkingBody } : { extraBody: noThinkingBody },
-  );
+  const llmOptions = config.model ? { model: config.model, extraBody: noThinkingBody } : { extraBody: noThinkingBody };
+  const llm = baseUrl.includes('bigmodel.cn')
+    ? createGLMAdapter(llmOptions)
+    : createOpenAIAdapter(llmOptions);
 
   const fastModelName = opts.fastModel ?? process.env['FAST_MODEL'];
   const fastLlm = fastModelName
@@ -335,36 +336,35 @@ async function main() {
     writeFeishuIdentitiesFile(obDir, ob.userStore, feishuOpenIdMap);
   }
 
-  // 中转广播插入：收到其它 agent 发言时写入本机 thread；带 sender_name/union_id/open_id 时注册用户与身份映射；并触发参与决策以便有机会回复
-  // 若飞书已推送过同一条（其他机器人发言），可能已 append 过一次，用简单去重避免重复写入
+  // 中转广播插入：收到其它 agent 发言时写入本机 thread；仅用 sender_union_id + sender_name 做身份映射（不用于 sender_open_id，避免 open_id cross app）
+  // 详见 doc/designs/中转消息ID与身份映射分析.md
   relayIngestRef.current = (threadId, userId, content, ts, ingestOpts) => {
     ob.threadStore.ensureThread(threadId, 'feishu', ts);
+    // 与飞书原生约定一致：user_id 统一为 feishu_on_xxx，sender_agent_id 来自中转多为 on_xxx
+    const normalizedUserId =
+      typeof userId === 'string' && userId.startsWith('on_') && !userId.startsWith('feishu_')
+        ? `feishu_${userId}`
+        : userId;
     if (ingestOpts?.sender_name) {
       const channels: Array<{ channelId: string; rawId: string }> = [];
-      if (ingestOpts.sender_open_id?.trim()) channels.push({ channelId: 'feishu', rawId: ingestOpts.sender_open_id.trim() });
-      if (ingestOpts.sender_union_id?.trim() && !channels.some((c) => c.rawId === ingestOpts.sender_union_id))
-        channels.push({ channelId: 'feishu', rawId: ingestOpts.sender_union_id.trim() });
+      // 仅用 union_id 作为 raw_id，不把 sender_open_id 加入（该 open_id 属于发言者应用，本应用使用会 99992361）
+      if (ingestOpts.sender_union_id?.trim()) channels.push({ channelId: 'feishu', rawId: ingestOpts.sender_union_id.trim() });
       ob.userStore.register({
-        userId:      userId,
+        userId:      normalizedUserId,
         displayName: ingestOpts.sender_name,
         role:        'member',
-        channels:    channels.length ? channels : [{ channelId: 'feishu', rawId: userId }],
+        channels:    channels.length ? channels : [{ channelId: 'feishu', rawId: normalizedUserId.replace(/^feishu_/, '') }],
       });
     }
-    if (feishuOpenIdMap && ingestOpts?.sender_open_id?.trim()) {
-      const entry: { openId: string; unionId?: string; name?: string } = {
-        openId: ingestOpts.sender_open_id.trim(),
-      };
-      if (ingestOpts.sender_union_id) entry.unionId = ingestOpts.sender_union_id;
-      if (ingestOpts.sender_name) entry.name = ingestOpts.sender_name;
-      feishuOpenIdMap.merge([entry]);
+    // 不把中转带来的 sender_open_id merge 进本机 feishu-openid-map（跨应用 open_id 会污染本应用映射）
+    if (feishuOpenIdMap && ingestOpts?.sender_union_id?.trim() && ingestOpts?.sender_name?.trim()) {
+      // 仅用 union_id + name 更新展示名（本应用下该 union_id 的 open_id 由飞书原生事件写入）
+      feishuOpenIdMap.mergeByUnionId(ingestOpts.sender_union_id.trim(), ingestOpts.sender_name.trim());
     }
-    // 写入历史时使用与 userStore 一致的规范 user_id（feishu_on_xxx），避免同一人出现多种 id 导致人名映错
-    let canonicalUserId = userId;
-    if (ingestOpts?.sender_union_id?.trim() || ingestOpts?.sender_open_id?.trim()) {
-      const resolved =
-        ob.userStore.resolveUser(ingestOpts.sender_union_id ?? ingestOpts.sender_open_id ?? '', 'feishu', true) ??
-        ob.userStore.resolveUser(ingestOpts.sender_open_id ?? ingestOpts.sender_union_id ?? '', 'feishu', true);
+    // 写入历史时使用与 userStore 一致的规范 user_id（feishu_on_xxx）
+    let canonicalUserId = normalizedUserId;
+    if (ingestOpts?.sender_union_id?.trim()) {
+      const resolved = ob.userStore.resolveUser(ingestOpts.sender_union_id.trim(), 'feishu', true);
       if (resolved) canonicalUserId = resolved;
     }
     const history = ob.threadStore.getHistory(threadId);
