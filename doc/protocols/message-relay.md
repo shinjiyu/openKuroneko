@@ -35,24 +35,29 @@
 
 **发言上报**
 
+客户端应把**与发给飞书一致的本条消息完整结构**原样作为 speak body 上报，不手挑字段，避免遗漏。中转整包透传，接收端按需使用。
+
 ```json
 {
   "type": "speak",
   "thread_id": "feishu:group:oc_xxx",
   "content": "<完整消息正文，勿截断>",
   "ts": 1734567890123,
-  "message_id": "optional_id",
   "sender_display_name": "可选，展示名",
-  "sender_union_id": "可选，飞书 union_id"
+  "sender_union_id": "可选，飞书 union_id",
+  "mentions": ["on_xxx"],
+  "reply_to": "可选，回复的消息 ID",
+  "attachments": []
 }
 ```
 
-- `thread_id`：与飞书 thread_id 一致（`<channel>:<type>:<平台原生ID>`）。
-- **`content`**：**必须为完整消息正文**（与发到飞书群的内容一致）。禁止只传 preview/摘要/前 N 字，否则接收方会看到被截断的消息。
-- 若消息中含 @ 提及，应把 **完整可读文本**（含 at 标签）放在 `content` 中，不要省略。
-- **open_id 与 union_id**：`content` 中的 at 标签（如 `<at user_id="ou_xxx">名字</at>`）**发送前应把本应用 open_id 换成 union_id**（如 `user_id="on_yyy"`），因为 open_id 是应用维度，其它 agent 无法解析；接收端收到后**反查本机 open_id 并还原**到 content，再写入 thread。
-- `message_id`：可选，用于去重。
-- `sender_display_name` / `sender_union_id`：推荐带上，便于接收方正确显示发言人。
+- `thread_id`、`content`：必填；与发到飞书群的一致。
+- **`content`**：**必须为完整消息正文**。禁止只传 preview/摘要。@ 的完整可读文本（含 at 标签）放在 content 中。
+- **open_id 与 union_id**：`content` 中 at 标签**发送前把本应用 open_id 换成 union_id**；接收端反查本机 open_id 还原后再写入 thread。
+- `sender_display_name` / `sender_union_id`：推荐带上。
+- `mentions`：可选，`string[]`，本条 @ 的 union_id 列表（从 content 解析）；接收端可据此设 `is_mention`。
+- `reply_to`：可选，回复的消息 ID（与 OutboundMessage.reply_to 一致）。
+- `attachments`：可选，与 OutboundMessage.attachments 一致。
 
 ### 3.2 服务器 → 客户端
 

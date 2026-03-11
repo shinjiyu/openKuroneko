@@ -78,10 +78,14 @@ export interface OuterBrainOptions {
 
 export { InnerBrainPool };
 
-/** 中转广播 ingest 时的可选信息（与 RelayBroadcastIngestOptions 一致；仅 union_id，open_id 由接收方本机映射补全） */
+/** 中转广播 ingest 时的可选信息（与 speak 整包透传字段一致） */
 export interface RelayIngestOptions {
   sender_name?: string;
   sender_union_id?: string;
+  mentions?: string[];
+  is_mention?: boolean;
+  reply_to?: string;
+  attachments?: import('../channels/types.js').MessageAttachment[];
 }
 
 export interface OuterBrain {
@@ -449,11 +453,13 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
       user_id:     userId,
       raw_user_id: userId,
       content,
-      is_mention:  false,
-      mentions:    [],
+      is_mention:  opts?.is_mention ?? false,
+      mentions:    (opts?.mentions ?? []).map((uid) => (uid.startsWith('on_') ? `feishu_${uid}` : uid)),
       ts,
       sender_name: opts?.sender_name,
       sender_type: undefined,
+      reply_to:    opts?.reply_to,
+      attachments: opts?.attachments,
     };
     logger.info('outer-brain', {
       event: 'relay.ingest.participate',
