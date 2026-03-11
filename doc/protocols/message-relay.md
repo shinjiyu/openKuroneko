@@ -41,21 +41,20 @@
 {
   "type": "speak",
   "thread_id": "feishu:group:oc_xxx",
-  "content": "<完整消息正文，勿截断>",
+  "content": "<完整消息正文，含 <at user_id=\"on_xxx\">...</at>，勿截断>",
   "ts": 1734567890123,
   "sender_display_name": "可选，展示名",
   "sender_union_id": "可选，飞书 union_id",
-  "mentions": ["on_xxx"],
   "reply_to": "可选，回复的消息 ID",
   "attachments": []
 }
 ```
 
 - `thread_id`、`content`：必填；与发到飞书群的一致。
-- **`content`**：**必须为完整消息正文**。禁止只传 preview/摘要。@ 的完整可读文本（含 at 标签）放在 content 中。
+- **`content`**：**必须为完整消息正文**。协议中**无** `preview` 字段，仅此字段表示正文；禁止传摘要或片段。@ 以 `<at user_id="on_xxx">...</at>` 形式放在 content 中，与发给飞书时一致（仅用标签表示 @，不单独传 mentions）。
 - **open_id 与 union_id**：`content` 中 at 标签**发送前把本应用 open_id 换成 union_id**；接收端反查本机 open_id 还原后再写入 thread。
 - `sender_display_name` / `sender_union_id`：推荐带上。
-- `mentions`：可选，`string[]`，本条 @ 的 union_id 列表（从 content 解析）；接收端可据此设 `is_mention`。
+- **`mentions`**：**不传**。接收端从 content 解析 `<at user_id="...">` 还原 mentions 与 `is_mention`，与飞书「消息中不带 mentions 结构、用标签表示 @」一致。历史包若带 `mentions` 数组，接收端可兼容使用。
 - `reply_to`：可选，回复的消息 ID（与 OutboundMessage.reply_to 一致）。
 - `attachments`：可选，与 OutboundMessage.attachments 一致。
 
@@ -101,7 +100,7 @@
 ## 6. 实现要点与常见错误
 
 - **speak 的 content 必须为完整正文**：与发到飞书群的那条消息的完整文本一致。若只传预览，接收方会只看到截断内容。
-- **@ / mention 信息**：应包含在 `content` 中，不要只传无 mention 的摘要。
+- **@ / mention 信息**：仅通过 `content` 表示；发送端不传 `mentions` 字段。接收端从 content 解析还原 mentions 与 is_mention，支持两种格式（与发给飞书/从飞书收到一致）：(1) 字符串中的 `<at user_id="on_xxx">...</at>`；(2) 飞书 post JSON 的 `zh_cn.content[].tag==='at'` 的 `user_id`。
 - **open_id → union_id（发送端）**：上报前将 content 里 at 标签中的 `user_id="ou_xxx"`（本应用 open_id）替换为 `user_id="on_yyy"`（对应 union_id），以便其它应用能识别同一人。
 - **union_id → open_id（接收端）**：收到 broadcast 后，将 content 里 at 标签中的 `user_id="on_xxx"` 反查本机 feishu-openid-map，替换为本应用 open_id 再写入 thread，便于本机展示与 @ 解析。
 - 发送 speak 的时机：在**群消息已成功发送到飞书**之后，用**替换过 open_id→union_id 的**完整 content 上报给中转。

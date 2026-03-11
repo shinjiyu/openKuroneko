@@ -304,21 +304,20 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     }
 
     // 群消息发送成功后，把「本条消息的完整结构」原样转发给 relay（与发给飞书的逻辑一一对应，不手挑字段避免遗漏）
-    // 注意：mentions 从带 <at user_id="..."> 的 outText 提取，不能用 msg.content（LLM 原始可能是 @名字，无 user_id）
+    // @ 只放在 content 的 <at user_id="..."> 中，且 relay 内统一用 union_id（便于接收端跨应用判定 is_mention）；不单独传 mentions。
     const relayReady = this.opts.relayUrl && this.opts.relayKey && this.opts.relayAgentId && this.relayWs?.readyState === 1;
     if (isGroup && this.opts.relayUrl && this.opts.relayKey && this.opts.relayAgentId) {
       if (relayReady) {
         try {
-          const relayContent = this.replaceOpenIdWithUnionIdInContent(outText);
-          const mentionUnionIds = this.extractUnionIdsFromContentForRelay(outText, relayContent);
+          // 与发给飞书的 outText 一致，仅做 open_id→union_id 替换；严禁用 slice/preview，必须发完整正文
+          const fullContentForRelay = this.replaceOpenIdWithUnionIdInContent(outText);
           const speakPayload: Record<string, unknown> = {
             type:                   'speak',
             thread_id:              msg.thread_id,
-            content:                relayContent,
+            content:                fullContentForRelay,
             ts:                     Date.now(),
             sender_display_name:    this._botDisplayName ?? this.opts.relayAgentId ?? undefined,
             sender_union_id:        this.opts.agentUnionId ?? undefined,
-            mentions:               mentionUnionIds,
           };
           if (msg.reply_to?.trim()) speakPayload.reply_to = msg.reply_to.trim();
           if (msg.attachments?.length) speakPayload.attachments = msg.attachments;
@@ -326,11 +325,10 @@ export class FeishuChannelAdapter implements ChannelAdapter {
           this.opts.relayLogger?.info('feishu', {
             event: 'relay.speak',
             data: {
-              thread_id:    msg.thread_id,
-              content_len:  relayContent.length,
-              preview:      relayContent.slice(0, 60),
-              mentions:     mentionUnionIds,
-              mentions_len: mentionUnionIds.length,
+              thread_id:       msg.thread_id,
+              content_len:     fullContentForRelay.length,
+              log_head_60:     fullContentForRelay.slice(0, 60),
+              log_tail_40:     fullContentForRelay.length > 40 ? fullContentForRelay.slice(-40) : fullContentForRelay,
             },
           });
         } catch (e) {
@@ -346,22 +344,37 @@ export class FeishuChannelAdapter implements ChannelAdapter {
   }
 
   /**
-   * 从 content 中提取 at 标签对应的 union_id 列表，供 relay speak 的 mentions 字段；去重。
-   * 优先从已替换后的 relayContent 取 on_xxx；若原始 content 仍含 ou_xxx，用 getUnionIdForOpenId 转成 union_id；
-   * 若无 union_id 则退化为 open_id，避免 mentions 始终为空。
+   * 从 content 解析 @ 对应的 user_id 列表（去重），供 relay 接收端还原 mentions。
+   * 支持两种格式（与「发给飞书 / 从飞书收到」一致）：
+   * 1) 字符串：我们 relay 和内部用的 <at user_id="on_xxx">...</at> / user_id="ou_xxx"
+   * 2) 飞书 post JSON：发给飞书/从飞书收到的 content 为 { zh_cn: { content: [ [ { tag:'at', user_id } ] ] } }
    */
-  private extractUnionIdsFromContentForRelay(originalContent: string, relayContent: string): string[] {
+  private parseMentionIdsFromContent(content: string): string[] {
     const ids = new Set<string>();
-    const reUnion = /user_id=["'](on_[a-zA-Z0-9_-]+)["']/g;
-    let m: RegExpExecArray | null;
-    while ((m = reUnion.exec(relayContent)) !== null) ids.add(m[1]!);
-    const reOpen = /user_id=["'](ou_[a-zA-Z0-9_-]+)["']/g;
-    while ((m = reOpen.exec(originalContent)) !== null) {
-      const openId = m[1]!;
-      const unionId = this.opts.getUnionIdForOpenId?.(openId);
-      if (unionId) ids.add(unionId);
-      else ids.add(openId);
+    const idPattern = /(?:on|ou)_[a-zA-Z0-9_-]+/;
+
+    // 格式 2：飞书 post JSON（与发给飞书的 body、从飞书收到的 message.content 一致）
+    try {
+      const obj = JSON.parse(content) as Record<string, unknown>;
+      const zh = (obj['zh_cn'] ?? obj['en_us'] ?? obj) as { content?: unknown[][] };
+      for (const row of zh.content ?? []) {
+        for (const el of Array.isArray(row) ? row : []) {
+          if (typeof el !== 'object' || el === null) continue;
+          const o = el as Record<string, unknown>;
+          if (o['tag'] === 'at' && typeof o['user_id'] === 'string' && idPattern.test(o['user_id'])) {
+            ids.add(o['user_id']);
+          }
+        }
+      }
+      if (ids.size > 0) return [...ids];
+    } catch {
+      // 非 JSON 或非 post，走格式 1
     }
+
+    // 格式 1：字符串中的 <at user_id="on_xxx"> / user_id="ou_xxx"
+    const re = /user_id=["'](on_[a-zA-Z0-9_-]+|ou_[a-zA-Z0-9_-]+)["']/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(content)) !== null) ids.add(m[1]!);
     return [...ids];
   }
 
@@ -436,7 +449,20 @@ export class FeishuChannelAdapter implements ChannelAdapter {
           const opts: RelayBroadcastIngestOptions = {};
           if (typeof data.sender_display_name === 'string') opts.sender_name = data.sender_display_name;
           if (typeof data.sender_union_id === 'string') opts.sender_union_id = data.sender_union_id;
-          if (Array.isArray(data.mentions) && data.mentions.every((x) => typeof x === 'string')) {
+          // mentions 从 content 解析还原（无 mention 列表时全靠 content）；relay 约定 content 内 at 用 union_id
+          const fromContent = this.parseMentionIdsFromContent(content);
+          if (fromContent.length) {
+            opts.mentions = fromContent;
+            const myUnionId = this.opts.agentUnionId?.trim();
+            if (myUnionId) {
+              // is_mention：content 里可能是 union_id(on_xxx) 或 open_id(ou_xxx)，都参与判定
+              opts.is_mention = fromContent.some(
+                (id) =>
+                  id === myUnionId ||
+                  (id.startsWith('ou_') && this.opts.getUnionIdForOpenId?.(id) === myUnionId),
+              );
+            }
+          } else if (Array.isArray(data.mentions) && data.mentions.every((x) => typeof x === 'string')) {
             opts.mentions = data.mentions as string[];
             const myUnionId = this.opts.agentUnionId?.trim();
             if (myUnionId && opts.mentions.includes(myUnionId)) opts.is_mention = true;
@@ -444,8 +470,8 @@ export class FeishuChannelAdapter implements ChannelAdapter {
           if (typeof data.reply_to === 'string' && data.reply_to.trim()) opts.reply_to = data.reply_to.trim();
           if (Array.isArray(data.attachments)) opts.attachments = data.attachments as MessageAttachment[];
           relayIngestRef?.current?.(threadId, userId, content, ts, Object.keys(opts).length > 0 ? opts : undefined);
-          console.log(`[relay] 收到广播 来自=${userId}${opts.sender_name ? ` (${opts.sender_name})` : ''} thread=${threadId} preview=${content.slice(0, 40)}...`);
-          relayLogger?.debug('feishu', { event: 'relay.broadcast_ingest', data: { thread_id: threadId, sender: userId, sender_name: opts.sender_name, preview: content.slice(0, 50) } });
+          console.log(`[relay] 收到广播 来自=${userId}${opts.sender_name ? ` (${opts.sender_name})` : ''} thread=${threadId} content_len=${content.length} head=${content.slice(0, 40)}...`);
+          relayLogger?.debug('feishu', { event: 'relay.broadcast_ingest', data: { thread_id: threadId, sender: userId, sender_name: opts.sender_name, content_len: content.length, log_head_50: content.slice(0, 50) } });
         }
       } catch {
         // ignore malformed
@@ -1035,8 +1061,8 @@ export class FeishuChannelAdapter implements ChannelAdapter {
 }
 
 // ── @ 提及归一化（参考 OpenClaw normalizeMentions）────────────────────────────────
-// 将正文中的 mention key（如 @_user_1）替换为 <at user_id="open_id">显示名</at>，便于 LLM 知道 @ 了谁；
-// 若 @ 的是机器人自己则替换为空，避免截断 /help 等命令。被 @ 机器人时事件常只带 app_id，需用 app_id 判是否为自己。
+// 将正文中的 mention key（如 @_user_1）替换为 <at user_id="open_id">显示名</at>，便于 LLM 知道 @ 了谁。
+// @ 机器人也保留为 at 标签，LLM 能看到「用户在 @ 我」；is_mention 仍由下游根据 id 判定。
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1053,9 +1079,9 @@ type IdParts = { openId: string; unionId?: string; appId?: string };
 function normalizeMentions(
   text: string,
   mentions: RawMention[] | undefined,
-  botOpenId: string,
-  botUnionId: string,
-  botAppId: string,
+  _botOpenId: string,
+  _botUnionId: string,
+  _botAppId: string,
   getIdParts: (id: unknown) => IdParts,
   getDisplayName: (openId: string, fallbackName: string) => string,
 ): string {
@@ -1065,15 +1091,9 @@ function normalizeMentions(
     const key = (m.key ?? '').trim();
     if (!key) continue;
     const { openId, unionId, appId } = getIdParts(m.id);
-    const isBot =
-      (botAppId !== '' && appId === botAppId) ||
-      (botOpenId !== '' && openId === botOpenId) ||
-      (botUnionId !== '' && unionId === botUnionId);
-    const replacement = isBot
-      ? ''
-      : openId
-        ? `<at user_id="${openId}">${escapeAtName(getDisplayName(openId, m.name ?? ''))}</at>`
-        : `@${escapeAtName(m.name ?? '')}`;
+    const replacement = openId
+      ? `<at user_id="${openId}">${escapeAtName(getDisplayName(openId, m.name ?? ''))}</at>`
+      : `@${escapeAtName(m.name ?? '')}`;
     result = result.replace(new RegExp(escapeRegex(key), 'g'), () => replacement);
   }
   return result.trim();
