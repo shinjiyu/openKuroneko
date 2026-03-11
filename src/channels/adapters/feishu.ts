@@ -309,6 +309,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       if (relayReady) {
         try {
           const relayContent = this.replaceOpenIdWithUnionIdInContent(msg.content ?? '');
+          const mentionUnionIds = this.extractUnionIdsFromContentForRelay(msg.content ?? '', relayContent);
           const speakPayload: Record<string, unknown> = {
             type:                   'speak',
             thread_id:              msg.thread_id,
@@ -316,7 +317,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
             ts:                     Date.now(),
             sender_display_name:    this._botDisplayName ?? this.opts.relayAgentId ?? undefined,
             sender_union_id:        this.opts.agentUnionId ?? undefined,
-            mentions:              this.extractUnionIdsFromContent(relayContent),
+            mentions:               mentionUnionIds,
           };
           if (msg.reply_to?.trim()) speakPayload.reply_to = msg.reply_to.trim();
           if (msg.attachments?.length) speakPayload.attachments = msg.attachments;
@@ -324,9 +325,11 @@ export class FeishuChannelAdapter implements ChannelAdapter {
           this.opts.relayLogger?.info('feishu', {
             event: 'relay.speak',
             data: {
-              thread_id:   msg.thread_id,
-              content_len: relayContent.length,
-              preview:     relayContent.slice(0, 60),
+              thread_id:    msg.thread_id,
+              content_len:  relayContent.length,
+              preview:      relayContent.slice(0, 60),
+              mentions:     mentionUnionIds,
+              mentions_len: mentionUnionIds.length,
             },
           });
         } catch (e) {
@@ -342,13 +345,23 @@ export class FeishuChannelAdapter implements ChannelAdapter {
   }
 
   /**
-   * 从 content 中提取 at 标签里的 union_id（user_id="on_xxx"），供 relay speak 的 mentions 字段；去重。
+   * 从 content 中提取 at 标签对应的 union_id 列表，供 relay speak 的 mentions 字段；去重。
+   * 优先从已替换后的 relayContent 取 on_xxx；若原始 content 仍含 ou_xxx（未配置 getUnionIdForOpenId 时），
+   * 则用 getUnionIdForOpenId 转成 union_id，避免 mentions 漏发。
    */
-  private extractUnionIdsFromContent(content: string): string[] {
+  private extractUnionIdsFromContentForRelay(originalContent: string, relayContent: string): string[] {
     const ids = new Set<string>();
-    const re = /user_id=["'](on_[a-zA-Z0-9_-]+)["']/g;
+    const reUnion = /user_id=["'](on_[a-zA-Z0-9_-]+)["']/g;
     let m: RegExpExecArray | null;
-    while ((m = re.exec(content)) !== null) ids.add(m[1]!);
+    while ((m = reUnion.exec(relayContent)) !== null) ids.add(m[1]!);
+    const fn = this.opts.getUnionIdForOpenId;
+    if (fn) {
+      const reOpen = /user_id=["'](ou_[a-zA-Z0-9_-]+)["']/g;
+      while ((m = reOpen.exec(originalContent)) !== null) {
+        const unionId = fn(m[1]!);
+        if (unionId) ids.add(unionId);
+      }
+    }
     return [...ids];
   }
 
