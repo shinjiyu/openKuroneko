@@ -346,21 +346,20 @@ export class FeishuChannelAdapter implements ChannelAdapter {
 
   /**
    * 从 content 中提取 at 标签对应的 union_id 列表，供 relay speak 的 mentions 字段；去重。
-   * 优先从已替换后的 relayContent 取 on_xxx；若原始 content 仍含 ou_xxx（未配置 getUnionIdForOpenId 时），
-   * 则用 getUnionIdForOpenId 转成 union_id，避免 mentions 漏发。
+   * 优先从已替换后的 relayContent 取 on_xxx；若原始 content 仍含 ou_xxx，用 getUnionIdForOpenId 转成 union_id；
+   * 若无 union_id 则退化为 open_id，避免 mentions 始终为空。
    */
   private extractUnionIdsFromContentForRelay(originalContent: string, relayContent: string): string[] {
     const ids = new Set<string>();
     const reUnion = /user_id=["'](on_[a-zA-Z0-9_-]+)["']/g;
     let m: RegExpExecArray | null;
     while ((m = reUnion.exec(relayContent)) !== null) ids.add(m[1]!);
-    const fn = this.opts.getUnionIdForOpenId;
-    if (fn) {
-      const reOpen = /user_id=["'](ou_[a-zA-Z0-9_-]+)["']/g;
-      while ((m = reOpen.exec(originalContent)) !== null) {
-        const unionId = fn(m[1]!);
-        if (unionId) ids.add(unionId);
-      }
+    const reOpen = /user_id=["'](ou_[a-zA-Z0-9_-]+)["']/g;
+    while ((m = reOpen.exec(originalContent)) !== null) {
+      const openId = m[1]!;
+      const unionId = this.opts.getUnionIdForOpenId?.(openId);
+      if (unionId) ids.add(unionId);
+      else ids.add(openId);
     }
     return [...ids];
   }

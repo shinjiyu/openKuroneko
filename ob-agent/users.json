@@ -47,7 +47,7 @@
       }
     ],
     "created_at": 1773058512133,
-    "last_seen_at": 1773170108266
+    "last_seen_at": 1773237329852
   },
   {
     "user_id": "feishu_on_94626acdda9676a3ff1aee6c9c58bf73",
@@ -95,5 +95,24 @@
     ],
     "created_at": 1773064233283,
     "last_seen_at": 1773146353719
+  },
+  {
+    "user_id": "feishu_on_7aa2ca0780e26e408ea4720a165b6fe5",
+    "display_name": "on_7aa2ca0780e26e408ea4720a165b6fe5",
+    "role": "member",
+    "channels": [
+      {
+        "channel_id": "feishu",
+        "raw_id": "on_7aa2ca0780e26e408ea4720a165b6fe5",
+        "priority": 1
+      },
+      {
+        "channel_id": "feishu",
+        "raw_id": "ou_49228b2ba4f5256cde045a8381bb3475",
+        "priority": 1
+      }
+    ],
+    "created_at": 1773214931245,
+    "last_seen_at": 1773214931246
   }
 ]

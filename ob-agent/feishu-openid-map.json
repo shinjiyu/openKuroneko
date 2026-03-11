@@ -1,18 +1,25 @@
 {
   "ou_9163765bbe607c016a2f4be74a884b0f": {
     "union_id": "on_c02179a7f12f94e9cd8efa3f64979f7a",
-    "name": "于振宇"
+    "name": "于振宇",
+    "lastSeenAt": 1773237329848
   },
   "ou_141ae8811fd13f0599a3201991abb4b7": {
     "name": "blackcat",
-    "union_id": "on_94626acdda9676a3ff1aee6c9c58bf73"
+    "union_id": "on_94626acdda9676a3ff1aee6c9c58bf73",
+    "lastSeenAt": 1773237099594
   },
   "ou_261470e2a40810ee655fc65b373663f1": {
     "name": "kuroneko",
-    "union_id": "on_efa363b520e0656c14a823b813e38094"
+    "union_id": "on_efa363b520e0656c14a823b813e38094",
+    "lastSeenAt": 1773234353942
   },
   "ou_9104c61f55037fdec2319e61acc832c1": {
     "name": "张彬",
     "union_id": "on_601e633b474a26510c7e9b6bb19e1fca"
+  },
+  "ou_49228b2ba4f5256cde045a8381bb3475": {
+    "lastSeenAt": 1773214931243,
+    "union_id": "on_7aa2ca0780e26e408ea4720a165b6fe5"
   }
 }
