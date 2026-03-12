@@ -437,7 +437,7 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
     }
   }
 
-  /** 中转广播写入 thread 后调用：构造合成消息并走参与决策，有机会回复 */
+  /** 中转广播写入 thread 后调用：走参与决策（含被 @ 时也由 LLM 判断是否回复，提示词会倾向被 @ 时积极回复） */
   function onRelayMessageIngested(
     threadId: string,
     userId: string,
@@ -463,7 +463,7 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
     };
     logger.info('outer-brain', {
       event: 'relay.ingest.participate',
-      data: { thread: threadId, from: userId, preview: content.slice(0, 60) },
+      data: { thread: threadId, from: userId, is_mention: msg.is_mention, preview: content.slice(0, 60) },
     });
     void runParticipateDecision(msg, { alreadyAppended: true });
   }

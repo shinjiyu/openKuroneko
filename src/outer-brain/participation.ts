@@ -170,8 +170,11 @@ export class ParticipationEngine {
     const identityLine = agentName
       ? `你是 ${agentName}，${soul.persona}。`
       : `你是${soul.persona}。你在本群中的展示名由当前渠道（如飞书应用名）提供。`;
+    const mentionHint = msg.is_mention
+      ? `本条消息中对方 @ 了你。多数情况下被 @ 时应积极回复；若确实无需回复（如仅打招呼、或话题与你完全无关）可自行判断保持 SILENT。`
+      : `你没有被 @。请判断你是否应该主动接话/参与。`;
     const systemPrompt = `${identityLine}
-你是群聊里的一个真实成员，现在收到一条新消息，你没有被 @。请判断你是否应该主动接话/参与。
+你是群聊里的一个真实成员，现在收到一条新消息。${mentionHint}
 参与策略：${aggressiveness}。
 
 ${speakCriteria}

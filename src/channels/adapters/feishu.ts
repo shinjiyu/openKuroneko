@@ -479,7 +479,7 @@ export class FeishuChannelAdapter implements ChannelAdapter {
           if (Array.isArray(data.attachments)) opts.attachments = data.attachments as MessageAttachment[];
           relayIngestRef?.current?.(threadId, userId, content, ts, Object.keys(opts).length > 0 ? opts : undefined);
           console.log(`[relay] 收到广播 来自=${userId}${opts.sender_name ? ` (${opts.sender_name})` : ''} thread=${threadId} content_len=${content.length} head=${content.slice(0, 40)}...`);
-          relayLogger?.debug('feishu', { event: 'relay.broadcast_ingest', data: { thread_id: threadId, sender: userId, sender_name: opts.sender_name, content_len: content.length, log_head_50: content.slice(0, 50) } });
+          relayLogger?.debug('feishu', { event: 'relay.broadcast_ingest', data: { thread_id: threadId, sender: userId, sender_name: opts.sender_name, content_len: content.length, is_mention: opts.is_mention ?? false, mentions_len: opts.mentions?.length ?? 0, log_head_50: content.slice(0, 50) } });
         }
       } catch {
         // ignore malformed
