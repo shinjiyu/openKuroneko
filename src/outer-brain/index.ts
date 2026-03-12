@@ -396,12 +396,11 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
       return;
     }
 
+    // 被 @ 也走参与决策（LLM 判断是否回复，提示词会倾向被 @ 时积极回复）
     if (msg.is_mention) {
-      logger.info('outer-brain', {
-        event: 'conversation.start',
-        data: { thread: msg.thread_id, reason: 'mention' },
-      });
-      await runConversation(msg);
+      threadStore.getOrCreate(msg);
+      threadStore.appendUser(msg.thread_id, msg.user_id, msg.content, msg.ts);
+      void runParticipateDecision(msg, { alreadyAppended: true });
       return;
     }
 
