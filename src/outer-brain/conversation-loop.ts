@@ -303,6 +303,11 @@ ${permissionRules}
 ${soul.system_prompt_extra ? `【人设补充】\n${soul.system_prompt_extra}` : ''}`;
 }
 
+/** 把 content 里的 at 标签转为 @显示名，传给 LLM 时无平台 id 噪音。供 conversation 与 participation 共用。 */
+export function contentForLLM(content: string): string {
+  return content.replace(/<at\s+user_id="[^"]*">([^<]*)<\/at>/g, (_, name: string) => `@${(name ?? '').trim() || '某人'}`);
+}
+
 function buildMessages(
   msg: InboundMessage,
   threadStore: ThreadStore,
@@ -387,16 +392,16 @@ function buildMessages(
   for (const entry of recentHistory) {
     if (entry.role === 'user') {
       const who = getDisplayNameForHistory(deps.userStore, msg.thread_id, entry.user_id ?? undefined);
-      messages.push({ role: 'user', content: `[${who}] ${entry.content}` });
+      messages.push({ role: 'user', content: `[${who}] ${contentForLLM(entry.content)}` });
     } else {
-      messages.push({ role: 'assistant', content: entry.content });
+      messages.push({ role: 'assistant', content: contentForLLM(entry.content) });
     }
   }
 
-  // 当前消息（支持多模态：图片附件转为 image_url content block）；有 sender_name 时用展示名便于区分谁在说话；有引用时带上被引用内容
+  // 当前消息（支持多模态：图片附件转为 image_url content block）；有 sender_name 时用展示名便于区分谁在说话；有引用时带上被引用内容；at 标签已转为 @显示名
   const mention   = msg.is_mention ? '（@了你）' : '';
   const speaker   = msg.sender_name ?? msg.user_id;
-  let baseText    = `[${speaker}${mention}] ${msg.content}`;
+  let baseText    = `[${speaker}${mention}] ${contentForLLM(msg.content)}`;
   const imageAtts = (msg.attachments ?? []).filter(
     (a) => a.type === 'image' && a.url && (a.url.startsWith('data:') || a.url.startsWith('http')),
   );
@@ -407,7 +412,7 @@ function buildMessages(
     baseText += `\n（本条含 ${imageUnresolved.length} 张图片，当前未能加载为可识别格式，请根据文字理解或提示用户重发）`;
   }
   const textPart = msg.quoted_content
-    ? `[回复自: ${msg.quoted_content}]\n\n${baseText}`
+    ? `[回复自: ${contentForLLM(msg.quoted_content)}]\n\n${baseText}`
     : baseText;
 
   if (imageAtts.length > 0) {

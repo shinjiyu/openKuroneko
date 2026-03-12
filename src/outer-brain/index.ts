@@ -26,7 +26,7 @@ import { ChannelRegistry } from '../channels/registry.js';
 import { ThreadStore } from '../threads/store.js';
 import { UserStore } from '../users/store.js';
 import { SoulLoader } from './soul.js';
-import { ConversationLoop } from './conversation-loop.js';
+import { ConversationLoop, contentForLLM } from './conversation-loop.js';
 import { ParticipationEngine } from './participation.js';
 import { BlockEscalationManager } from './block-escalation.js';
 import { PushLoop } from './push-loop.js';
@@ -275,6 +275,9 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
     msg: InboundMessage,
     opts?: { alreadyAppended?: boolean },
   ): Promise<void> {
+    // #region agent log
+    fetch('http://127.0.0.1:7785/ingest/d572a1ed-243c-4a7d-85e3-c51a2c7aed1a', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7d0410' }, body: JSON.stringify({ sessionId: '7d0410', hypothesisId: 'H5', location: 'outer-brain/index.ts:runParticipateDecision.entry', message: 'participate entry', data: { msg_id: msg.id.slice(0, 24), is_mention: msg.is_mention, thread: msg.thread_id.slice(-20), preview: msg.content.slice(0, 50) }, timestamp: Date.now() }) }).catch(() => {});
+    // #endregion
     const currentSoul = soulLoader.get();
     const innerStatus = getInnerStatus();
     const innerStatusStr = innerStatus
@@ -283,7 +286,7 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
 
     const recentHistory = threadStore.getHistory(msg.thread_id).slice(-10);
     const recentText = recentHistory
-      .map((h) => `${h.role === 'user' ? (h.user_id ?? 'user') : 'agent'}: ${h.content}`)
+      .map((h) => `${h.role === 'user' ? (h.user_id ?? 'user') : 'agent'}: ${contentForLLM(h.content)}`)
       .join('\n');
 
     const shouldSpeak = await participationEngine.shouldSpeak(
@@ -305,6 +308,9 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
       participationEngine.recordSpeak(msg.thread_id);
       await runConversation(msg, opts?.alreadyAppended ? { skipAppendUser: true } : undefined);
     } else {
+      // #region agent log
+      fetch('http://127.0.0.1:7785/ingest/d572a1ed-243c-4a7d-85e3-c51a2c7aed1a', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7d0410' }, body: JSON.stringify({ sessionId: '7d0410', hypothesisId: 'H4', location: 'outer-brain/index.ts:runParticipateDecision.silent', message: 'shouldSpeak=false', data: { msg_id: msg.id.slice(0, 24), is_mention: msg.is_mention, preview: msg.content.slice(0, 60) }, timestamp: Date.now() }) }).catch(() => {});
+      // #endregion
       if (!opts?.alreadyAppended) {
         threadStore.getOrCreate(msg);
         threadStore.appendUser(msg.thread_id, msg.user_id, msg.content, msg.ts);
@@ -396,11 +402,16 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
       return;
     }
 
-    // 被 @ 也走参与决策（LLM 判断是否回复，提示词会倾向被 @ 时积极回复）
+    // #region agent log
+    fetch('http://127.0.0.1:7785/ingest/d572a1ed-243c-4a7d-85e3-c51a2c7aed1a', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7d0410' }, body: JSON.stringify({ sessionId: '7d0410', hypothesisId: 'H2', location: 'outer-brain/index.ts:onInboundMessage.group', message: 'group msg branch', data: { flow: 'native', is_mention: msg.is_mention, mentions_len: msg.mentions?.length ?? 0, thread: msg.thread_id.slice(-20), preview: msg.content.slice(0, 50) }, timestamp: Date.now() }) }).catch(() => {});
+    // #endregion
+
+    // 被 @ 时直接回复，不经过参与决策（避免 LLM 误判 SILENT）
     if (msg.is_mention) {
       threadStore.getOrCreate(msg);
       threadStore.appendUser(msg.thread_id, msg.user_id, msg.content, msg.ts);
-      void runParticipateDecision(msg, { alreadyAppended: true });
+      logger.info('outer-brain', { event: 'conversation.start', data: { thread: msg.thread_id, reason: 'mention' } });
+      void runConversation(msg, { skipAppendUser: true });
       return;
     }
 
@@ -464,6 +475,14 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
       event: 'relay.ingest.participate',
       data: { thread: threadId, from: userId, is_mention: msg.is_mention, preview: content.slice(0, 60) },
     });
+    // #region agent log
+    fetch('http://127.0.0.1:7785/ingest/d572a1ed-243c-4a7d-85e3-c51a2c7aed1a', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7d0410' }, body: JSON.stringify({ sessionId: '7d0410', hypothesisId: 'H1', location: 'outer-brain/index.ts:onRelayMessageIngested', message: 'relay ingest', data: { flow: 'relay', opts_is_mention: opts?.is_mention ?? false, msg_is_mention: msg.is_mention, thread: threadId.slice(-20), preview: content.slice(0, 50) }, timestamp: Date.now() }) }).catch(() => {});
+    // #endregion
+    if (msg.is_mention) {
+      logger.info('outer-brain', { event: 'conversation.start', data: { thread: threadId, reason: 'relay_mention' } });
+      void runConversation(msg, { skipAppendUser: true });
+      return;
+    }
     void runParticipateDecision(msg, { alreadyAppended: true });
   }
 

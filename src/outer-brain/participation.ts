@@ -16,6 +16,7 @@ import type { InboundMessage } from '../channels/types.js';
 import type { SoulConfig } from './soul.js';
 import type { LLMAdapter } from '../adapter/index.js';
 import type { Logger } from '../logger/index.js';
+import { contentForLLM } from './conversation-loop.js';
 
 interface GroupSpeakState {
   /** 最近一次主动发言时间 */
@@ -61,7 +62,12 @@ export class ParticipationEngine {
     const level = soul.participation.proactive_level;
 
     // level 0 = 完全沉默（除非 @mention，由上层处理）
-    if (level === 0) return false;
+    if (level === 0) {
+      // #region agent log
+      if (typeof fetch !== 'undefined') fetch('http://127.0.0.1:7785/ingest/d572a1ed-243c-4a7d-85e3-c51a2c7aed1a', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7d0410' }, body: JSON.stringify({ sessionId: '7d0410', hypothesisId: 'H3', location: 'participation.ts:shouldSpeak', message: 'early exit', data: { reason: 'level0', is_mention: msg.is_mention, preview: msg.content.slice(0, 40) }, timestamp: Date.now() }) }).catch(() => {});
+      // #endregion
+      return false;
+    }
 
     const state = this.getOrCreateState(msg.thread_id);
     const now   = Date.now();
@@ -70,6 +76,9 @@ export class ParticipationEngine {
 
     // 冷却期
     if (now - state.last_proactive_at < soul.participation.speak_cooldown_ms) {
+      // #region agent log
+      if (typeof fetch !== 'undefined') fetch('http://127.0.0.1:7785/ingest/d572a1ed-243c-4a7d-85e3-c51a2c7aed1a', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7d0410' }, body: JSON.stringify({ sessionId: '7d0410', hypothesisId: 'H3', location: 'participation.ts:shouldSpeak', message: 'early exit', data: { reason: 'cooldown', is_mention: msg.is_mention }, timestamp: Date.now() }) }).catch(() => {});
+      // #endregion
       return false;
     }
 
@@ -79,18 +88,31 @@ export class ParticipationEngine {
       state.proactive_count_reset_at = now;
     }
     if (state.proactive_count_5min >= soul.participation.max_proactive_per_5min) {
+      // #region agent log
+      if (typeof fetch !== 'undefined') fetch('http://127.0.0.1:7785/ingest/d572a1ed-243c-4a7d-85e3-c51a2c7aed1a', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7d0410' }, body: JSON.stringify({ sessionId: '7d0410', hypothesisId: 'H3', location: 'participation.ts:shouldSpeak', message: 'early exit', data: { reason: '5min_limit', count: state.proactive_count_5min, is_mention: msg.is_mention }, timestamp: Date.now() }) }).catch(() => {});
+      // #endregion
       return false;
     }
 
     // level 1 = 谨慎，仅回答直接问题（规则判断）
     if (level === 1) {
       const isQuestion = msg.content.trim().endsWith('?') || msg.content.trim().endsWith('？');
-      if (!isQuestion) return false;
+      if (!isQuestion) {
+        // #region agent log
+        if (typeof fetch !== 'undefined') fetch('http://127.0.0.1:7785/ingest/d572a1ed-243c-4a7d-85e3-c51a2c7aed1a', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7d0410' }, body: JSON.stringify({ sessionId: '7d0410', hypothesisId: 'H3', location: 'participation.ts:shouldSpeak', message: 'early exit', data: { reason: 'level1_not_question', is_mention: msg.is_mention, preview: msg.content.slice(0, 40) }, timestamp: Date.now() }) }).catch(() => {});
+        // #endregion
+        return false;
+      }
     }
 
     // 太短的消息：level < 3 时忽略单字/两字（表情、语气词）；level >= 3 时允许 2 字以上（如「好」「行啊」）
     const minLen = level >= 3 ? 2 : 3;
-    if (msg.content.trim().length < minLen) return false;
+    if (msg.content.trim().length < minLen) {
+      // #region agent log
+      if (typeof fetch !== 'undefined') fetch('http://127.0.0.1:7785/ingest/d572a1ed-243c-4a7d-85e3-c51a2c7aed1a', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7d0410' }, body: JSON.stringify({ sessionId: '7d0410', hypothesisId: 'H3', location: 'participation.ts:shouldSpeak', message: 'early exit', data: { reason: 'minLen', len: msg.content.trim().length, minLen, is_mention: msg.is_mention }, timestamp: Date.now() }) }).catch(() => {});
+      // #endregion
+      return false;
+    }
 
     // ── 规则兜底：明显叫大家/你们参与的句子（level>=3 时直接 SPEAK，避免 LLM 判 SILENT）────────────────
     if (level >= 3) {
@@ -112,7 +134,13 @@ export class ParticipationEngine {
     // ── LLM 判断 ────────────────────────────────────────────────────────────
     // 优先使用快速模型（无 thinking），避免主力模型浪费 token 做二分类
 
+    // #region agent log
+    if (typeof fetch !== 'undefined') fetch('http://127.0.0.1:7785/ingest/d572a1ed-243c-4a7d-85e3-c51a2c7aed1a', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7d0410' }, body: JSON.stringify({ sessionId: '7d0410', hypothesisId: 'H4', location: 'participation.ts:shouldSpeak', message: 'calling_llm', data: { is_mention: msg.is_mention, preview: msg.content.slice(0, 50) }, timestamp: Date.now() }) }).catch(() => {});
+    // #endregion
     const decision = await this.askLLM(msg, recentGroupMessages, soul, innerStatus, level);
+    // #region agent log
+    if (typeof fetch !== 'undefined') fetch('http://127.0.0.1:7785/ingest/d572a1ed-243c-4a7d-85e3-c51a2c7aed1a', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7d0410' }, body: JSON.stringify({ sessionId: '7d0410', hypothesisId: 'H4', location: 'participation.ts:shouldSpeak', message: 'llm_decision', data: { decision, is_mention: msg.is_mention, preview: msg.content.slice(0, 40) }, timestamp: Date.now() }) }).catch(() => {});
+    // #endregion
     if (decision) {
       state.last_proactive_at = now;
       state.proactive_count_5min++;
@@ -193,7 +221,7 @@ ${innerStatus}
 ${recentGroupMessages}
 
 新消息（来自 ${msg.user_id}）：
-${msg.content}`;
+${contentForLLM(msg.content)}`;
 
     try {
       const llm = this.fastLlm ?? this.llm;
