@@ -202,6 +202,9 @@ export class FeishuChannelAdapter implements ChannelAdapter {
     const attachments = msg.attachments ?? [];
 
     // 出站 @：飞书需 at 标签或 post at 元素才渲染；支持 @ou_/@on_（id）和 @名字（展示名反查 open_id）
+    // #region agent log
+    fetch('http://127.0.0.1:7246/ingest/7dcedc1b-42e2-492d-870e-6453b83a8083',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'feishu.ts:send_msg_content',message:'adapter received msg.content',data:{content_len:(msg.content??'').length,thread_id:msg.thread_id,isGroup},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
+    // #endregion
     let outText = (msg.content ?? '').trim() || ' ';
     const beforeReplace = outText;
     outText = outText
@@ -310,7 +313,13 @@ export class FeishuChannelAdapter implements ChannelAdapter {
       if (relayReady) {
         try {
           // 与发给飞书的 outText 一致，仅做 open_id→union_id 替换；严禁用 slice/preview，必须发完整正文
+          // #region agent log
+          fetch('http://127.0.0.1:7246/ingest/7dcedc1b-42e2-492d-870e-6453b83a8083',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'feishu.ts:relay_before_payload',message:'outText vs fullContentForRelay',data:{outText_len:outText.length,thread_id:msg.thread_id},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{});
+          // #endregion
           const fullContentForRelay = this.replaceOpenIdWithUnionIdInContent(outText);
+          // #region agent log
+          fetch('http://127.0.0.1:7246/ingest/7dcedc1b-42e2-492d-870e-6453b83a8083',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'feishu.ts:relay_payload_content',message:'fullContentForRelay length in payload',data:{fullContentForRelay_len:fullContentForRelay.length,thread_id:msg.thread_id},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{});
+          // #endregion
           const speakPayload: Record<string, unknown> = {
             type:                   'speak',
             thread_id:              msg.thread_id,
@@ -325,10 +334,9 @@ export class FeishuChannelAdapter implements ChannelAdapter {
           this.opts.relayLogger?.info('feishu', {
             event: 'relay.speak',
             data: {
-              thread_id:       msg.thread_id,
-              content_len:     fullContentForRelay.length,
-              log_head_60:     fullContentForRelay.slice(0, 60),
-              log_tail_40:     fullContentForRelay.length > 40 ? fullContentForRelay.slice(-40) : fullContentForRelay,
+              thread_id:    msg.thread_id,
+              content_len:  fullContentForRelay.length,
+              content:      fullContentForRelay,
             },
           });
         } catch (e) {

@@ -51,6 +51,9 @@ export class ChannelRegistry {
    * thread_id 格式 <channel>:<type>:<id>，从中解析出 channel_id。
    */
   async send(msg: OutboundMessage): Promise<void> {
+    // #region agent log
+    fetch('http://127.0.0.1:7246/ingest/7dcedc1b-42e2-492d-870e-6453b83a8083',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'registry.ts:send_entry',message:'ChannelRegistry.send msg.content',data:{content_len:msg.content?.length??0,thread_id:msg.thread_id},timestamp:Date.now(),hypothesisId:'H2_H3'})}).catch(()=>{});
+    // #endregion
     const channelId = extractChannelId(msg.thread_id);
     const adapter = this.adapters.get(channelId);
     if (!adapter) {

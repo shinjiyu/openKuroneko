@@ -192,6 +192,9 @@ export class ConversationLoop {
 
       // 没有 tool call → LLM 直接回复
       finalReply = result.content.trim() || null;
+      // #region agent log
+      fetch('http://127.0.0.1:7246/ingest/7dcedc1b-42e2-492d-870e-6453b83a8083',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'conversation-loop.ts:after_finalReply',message:'result.content vs finalReply',data:{result_content_len:result.content?.length??0,finalReply_len:finalReply?.length??0,thread_id:msg.thread_id},timestamp:Date.now(),hypothesisId:'H_LLM'})}).catch(()=>{});
+      // #endregion
       break;
     }
 
@@ -202,6 +205,9 @@ export class ConversationLoop {
       });
       // 发送回复到对应频道（若用户消息是引用回复，则带上 reply_to 以在飞书显示为引用）
       try {
+        // #region agent log
+        fetch('http://127.0.0.1:7246/ingest/7dcedc1b-42e2-492d-870e-6453b83a8083',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'conversation-loop.ts:send_before',message:'finalReply before channelRegistry.send',data:{content_len:finalReply.length,log_tail_30:finalReply.slice(-30),thread_id:msg.thread_id},timestamp:Date.now(),hypothesisId:'H1_H5'})}).catch(()=>{});
+        // #endregion
         await channelRegistry.send({
           thread_id: msg.thread_id,
           content:   finalReply,
