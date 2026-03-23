@@ -7,12 +7,16 @@ alwaysApply: true
 
 项目有独立日志模块（`M11. Logger`），所有模块统一通过该模块写日志。**任何模块不得直接 console.log/print 替代结构化日志。**
 
-## 日志模块职责
+## 协议与字段（工程化）
 
-- 提供结构化日志（JSON 行）：`{ ts, level, module, agentId, event, data }`
-- 日志写入临时目录：`<全局临时目录>/<agent_id>/logs/YYYY-MM-DD.jsonl`（追加）
-- 支持级别：`debug | info | warn | error`
-- 保证日志**不丢失**：即使 Agent 崩溃，已写入的行也已落盘
+**完整约定见 `doc/protocols/logging.md`（v2）。** 每行 JSON 至少包含：
+
+- `schema_version`、`log_id`（UUID）、`ts`、`level`、`module`、`agentId`、`event`
+- **`analyzed`**（bool，默认 `false`）：是否已分析；事后批量标注用 **`appendAnalysisMarker`** 写 `logs/analysis-markers.jsonl`，勿改主日志
+- **`tags`**（可选）：分类标签，关键路径建议带 `replay-critical`、`tool`、`io` 等（见协议 §4）
+- `data`：上下文对象（端点 id、摘要、错误等放在 `data` 内）
+
+日志写入：`<tempDir>/logs/YYYY-MM-DD.jsonl`（追加）。支持级别：`debug | info | warn | error`。保证已写入行**落盘**。
 
 ## 必须记录的事件
 
@@ -31,9 +35,13 @@ alwaysApply: true
 ## 使用示例
 
 ```ts
-// ✅ 正确：通过 Logger 模块
-logger.info('io', { event: 'input.read', endpointId: 'default', preview: msg.slice(0, 80) });
-logger.error('tool', { event: 'shell_exec.failed', cmd, error: e.message });
+// ✅ 正确：通过 Logger 模块（data 内放详情；可选 tags / analyzed）
+logger.info('io', {
+  event: 'input.read',
+  tags: ['io', 'replay-critical'],
+  data: { endpointId: 'default', preview: msg.slice(0, 80) },
+});
+logger.error('tool', { event: 'shell_exec.failed', data: { cmd, error: e.message } });
 
 // ❌ 错误：直接打印
 console.log('input:', msg);
