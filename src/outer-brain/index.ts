@@ -32,6 +32,7 @@ import { BlockEscalationManager } from './block-escalation.js';
 import { PushLoop } from './push-loop.js';
 import {
   createReadInnerStatusTool,
+  createReadFileTool,
   createSendDirectiveTool,
   createSetGoalTool,
   createStopInnerBrainTool,
@@ -151,6 +152,7 @@ export function createOuterBrain(opts: OuterBrainOptions): OuterBrain {
     createSearchThreadTool(threadStore, userStore),
     createSendFileTool(channelRegistry),
     obGetTimeTool,
+    createReadFileTool(obDir, opts.innerBrainPool ?? null, logger),
   ];
 
   if (opts.innerBrainPool) {

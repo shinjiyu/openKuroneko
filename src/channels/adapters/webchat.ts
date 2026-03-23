@@ -43,6 +43,17 @@ import type { InnerBrainPool } from '../../outer-brain/inner-brain-pool.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/** dist 构建不复制 .html，运行 node dist/... 时需回退到源码目录 */
+function resolveWebchatUiPath(): string {
+  const besideModule = path.join(__dirname, 'webchat-ui.html');
+  if (fs.existsSync(besideModule)) return besideModule;
+  const fromSrc = path.join(process.cwd(), 'src/channels/adapters/webchat-ui.html');
+  if (fs.existsSync(fromSrc)) return fromSrc;
+  const fromDist = path.join(process.cwd(), 'dist/channels/adapters/webchat-ui.html');
+  if (fs.existsSync(fromDist)) return fromDist;
+  return besideModule;
+}
+
 // ── 配置类型 ─────────────────────────────────────────────────────────────────
 
 export interface WebchatUserEntry {
@@ -301,7 +312,7 @@ export class WebchatChannelAdapter implements ChannelAdapter {
   // ── GET / → 内嵌 Web UI ────────────────────────────────────────────────────
 
   private serveUi(res: ServerResponse): void {
-    const uiPath = path.join(__dirname, 'webchat-ui.html');
+    const uiPath = resolveWebchatUiPath();
     try {
       const html = fs.readFileSync(uiPath, 'utf8');
       res.writeHead(200, {

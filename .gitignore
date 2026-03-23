@@ -17,6 +17,9 @@ Thumbs.db
 # Runtime temp (agent 运行时临时目录由环境变量指定，不纳入版本控制)
 .kuroneko_tmp/
 
+# 自演化工具本地状态与日志（协议见 doc/protocols/self-evolution.md）
+.self-evolution/
+
 # 内脑运行时状态（brain 状态、技能库、工具输出等，不纳入版本控制）
 chat-agent/.brain/
 chat-agent/.tool-outputs/

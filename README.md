@@ -69,6 +69,21 @@ npm install
 
 配置（飞书、Kimi 等）写在 `.env` 中，`start.ps1` 会自动加载。Linux/macOS 仍使用 `./start.sh` / `./stop.sh`。
 
+## 自演化（实验性）
+
+基于 Git 的快照事务：`begin` → 修改工作区 → `verify`（默认 `npm run build`）→ `commit` 或 `rollback`。协议见 [`doc/protocols/self-evolution.md`](./doc/protocols/self-evolution.md)。
+
+```bash
+npm run build
+npx kuroneko-evolve begin
+# …编辑代码…
+npx kuroneko-evolve verify
+npx kuroneko-evolve commit -m "evolution: 说明"
+# 失败则: npx kuroneko-evolve rollback
+```
+
+开发调试：`npm run dev:evolve -- status`（子命令放 `--` 之后）。
+
 ## Agent 目录结构
 
 每个 agent 在 `$OPENKURONEKO_TMP/<agent_id>/` 下自动创建：

@@ -1,8 +1,8 @@
 # 外脑（Outer Brain）协议
 
-**版本**：2.0  
-**日期**：2026-03-07  
-**变更**：补充内外脑完整交互路径、任务归属与权限模型、directives 消费机制（v1 directives 未被内脑读取为 bug，已修复）
+**版本**：2.1  
+**日期**：2026-03-05  
+**变更**：外脑新增受限 `read_file` 工具（可读 ob 目录与已登记内脑的 temp/work 目录）；禁止列表改为「内脑级任意读仍禁止」
 
 ---
 
@@ -248,8 +248,9 @@ alice 回复 → 写 directives: {"type":"feedback","content":"[BLOCK解封] 用
 | `send_directive` | 向内脑发即时指令（约束/需求/反馈）| 所有已注册用户 |
 | `search_thread` | 搜索对话历史 | 所有已注册用户 |
 | `get_time` | 获取当前时间 | 所有已注册用户 |
+| `read_file` | 受限读文件：仅 `scope=ob`（外脑工作目录下）或 `inner_temp` / `inner_work`（须有效 `instance_id`，路径不得含 `..`）；用于读内脑 `output`/`status`/`input`/日志等 | 所有已注册用户 |
 
-**禁止工具**：`shell_exec`、`read_file`、`write_file`、`web_search` 等内脑专属工具。
+**禁止工具（内脑级）**：`shell_exec`、**任意路径**的 `read_file` / `write_file`、`web_search` 等内脑全量工具集。外脑的 `read_file` 为单独实现，仅能解析到上述三个根目录之一，且有字节上限。
 
 ---
 

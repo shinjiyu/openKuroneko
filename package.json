@@ -6,12 +6,14 @@
   "main": "dist/cli/index.js",
   "bin": {
     "kuroneko": "dist/cli/index.js",
-    "kuroneko-ob": "dist/cli/outer-brain.js"
+    "kuroneko-ob": "dist/cli/outer-brain.js",
+    "kuroneko-evolve": "dist/cli/evolution.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && mkdir -p dist/channels/adapters && cp src/channels/adapters/webchat-ui.html dist/channels/adapters/",
     "dev": "tsx src/cli/index.ts",
     "dev:ob": "tsx src/cli/outer-brain.ts",
+    "dev:evolve": "tsx src/cli/evolution.ts",
     "lint": "eslint src --ext .ts",
     "test": "vitest run"
   },
