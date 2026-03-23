@@ -21,11 +21,19 @@ Thumbs.db
 chat-agent/.brain/
 chat-agent/.tool-outputs/
 
-# 外脑运行时数据（对话历史、用户配置含 token，不纳入版本控制）
+# 外脑 ob-agent：运行时数据、内脑任务目录、身份映射等（默认不入库）
+# 保留：inter-instance.sh（多实例脚本）如需提交请确保未被下方规则覆盖
 ob-agent/threads/
+ob-agent/tasks/
+ob-agent/agent-pool/
+ob-agent/users.json
 ob-agent/webchat-users.json
-ob-agent/soul.md
+ob-agent/feishu-openid-map.json
+ob-agent/feishu-openid-map.json.bak
 ob-agent/feishu-identities.json
+ob-agent/soul.md
+ob-agent/inner-brain.pid
+ob-agent/*.pid
 
 # 中转服务鉴权（仅服务器本地，禁止入库）
 relay/.env
