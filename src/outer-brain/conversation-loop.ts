@@ -297,6 +297,7 @@ ${permissionRules}
 - 直接输出回复文本即可，框架会自动发送给用户
 - 需要了解内脑状态时，先调用 read_inner_status 工具，再回复
 - 需要查看内脑完整产出、日志或任务目录文件时，用 read_file：scope=inner_temp、instance_id 从 list_inner_brains 获取、relative_path 如 output、status、logs/某日.jsonl；读外脑目录下文件用 scope=ob
+- 内脑可在其工作目录内修改代码、运行构建与 git（由你通过 set_goal / send_directive 驱动任务）；外脑不执行仓库级 merge/commit。若部署启用了 Git worktree，每个实例在独立 worktree 上开发，合并进主分支由人工或其它工具完成
 - 转达用户指令给内脑时调用 send_directive 或 set_goal（set_goal 仅在明确开始新任务时）
 - 查询其他频道历史记录时调用 search_thread，thread_id 必须从已知频道列表中选取
 - 工具调用完成后，输出最终回复文本结束本轮对话

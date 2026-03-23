@@ -1,5 +1,10 @@
 export { createReadInnerStatusTool }  from './read-inner-status.js';
 export { createReadFileTool }         from './read-file.js';
+export {
+  createEvolutionObTools,
+  createEvolutionWorktreeObTools,
+  resolveEvolutionRepoRoot,
+} from './evolution-ob-tools.js';
 export { createSendDirectiveTool }    from './send-directive.js';
 export { createSetGoalTool }          from './set-goal.js';
 export { createStopInnerBrainTool }   from './stop-inner-brain.js';

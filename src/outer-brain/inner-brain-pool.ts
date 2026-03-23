@@ -18,11 +18,19 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import type { Logger } from '../logger/index.js';
 import { deriveAgentId, globalTmpDir } from '../identity/index.js';
+import {
+  branchExists,
+  isGitRepo,
+  resolveMainBranch,
+  resolveWorktreeStartPoint,
+  worktreeAdd,
+} from '../evolution/git-ops.js';
 import { getAgentPoolBrainDir, seedRelevantSkillsToWorkDir } from './agent-pool.js';
 
 // ── 类型定义 ──────────────────────────────────────────────────────────────────
@@ -43,6 +51,14 @@ export interface InstanceRecord {
   exitCode:      number | null;
   exitSignal:    string | null;
   exitedAt:      Date | null;
+  /** 配置了 gitRepoRoot 时：主仓库根（与 merge/abort 一致） */
+  gitRepoRoot?:      string;
+  /** Git worktree 绝对路径（与 workDir 相同） */
+  gitWorktreePath?:  string;
+  /** 该实例独占分支，如 evolve/ib-xxx */
+  gitEvolveBranch?:  string;
+  /** 创建 worktree 时的主分支名（供合并参考） */
+  gitMainBranch?:    string;
 }
 
 export interface InnerBrainPoolOptions {
@@ -59,6 +75,12 @@ export interface InnerBrainPoolOptions {
   logger: Logger;
   /** 实例退出时回调 */
   onInstanceExit?: (instance: InstanceRecord) => void;
+  /**
+   * 主 Git 仓库根（须含 .git）。若设置，每个实例在全局 tmp 下 `kuroneko-repo-wt/<hash>/<instanceId>/` 创建 worktree，
+   * 内脑 `--dir` 指向该路径；否则仍为 `<obDir>/tasks/<instanceId>/`。
+   * 协议：doc/protocols/self-evolution.md v2
+   */
+  gitRepoRoot?: string;
 }
 
 // ── InnerBrainPool ────────────────────────────────────────────────────────────
@@ -70,13 +92,27 @@ export class InnerBrainPool {
 
   private readonly tasksDir: string;
   private readonly maxConcurrent: number;
+  private readonly resolvedGitRepoRoot: string | null;
 
   constructor(opts: InnerBrainPoolOptions) {
     this.opts          = opts;
     this.tasksDir      = path.join(opts.obDir, 'tasks');
     this.maxConcurrent = opts.maxConcurrent ?? 4;
+    this.resolvedGitRepoRoot =
+      typeof opts.gitRepoRoot === 'string' && opts.gitRepoRoot.trim() !== ''
+        ? path.resolve(opts.gitRepoRoot.trim())
+        : null;
 
     fs.mkdirSync(this.tasksDir, { recursive: true });
+  }
+
+  /** 是否启用每实例 Git worktree（构造时传入 gitRepoRoot 且为有效仓库） */
+  usesGitWorktree(): boolean {
+    return this.resolvedGitRepoRoot != null;
+  }
+
+  getGitRepoRoot(): string | null {
+    return this.resolvedGitRepoRoot;
   }
 
   // ── 公开接口 ──────────────────────────────────────────────────────────────
@@ -90,12 +126,16 @@ export class InnerBrainPool {
       );
     }
 
-    const id      = this.generateId();
-    const workDir = path.join(this.tasksDir, id);
+    const id = this.generateId();
+
+    const gitMeta = this.tryCreateGitWorktree(id);
+    const workDir = gitMeta?.workDir ?? path.join(this.tasksDir, id);
     const tempDir = this.deriveTempDir(workDir);
 
-    // 创建工作目录和临时目录
-    fs.mkdirSync(workDir, { recursive: true });
+    // 非 worktree：创建任务子目录
+    if (!gitMeta) {
+      fs.mkdirSync(workDir, { recursive: true });
+    }
     fs.mkdirSync(path.join(tempDir, 'logs'), { recursive: true });
 
     // 写入初始目标到 input 文件（供 BLOCKED 态消费）
@@ -136,6 +176,14 @@ export class InnerBrainPool {
       goal,
       originUser,
       ...(originThread ? { originThread } : {}),
+      ...(gitMeta
+        ? {
+            gitRepoRoot:     gitMeta.gitRepoRoot,
+            gitWorktreePath: gitMeta.workDir,
+            gitEvolveBranch: gitMeta.evolveBranch,
+            gitMainBranch:   gitMeta.mainBranch,
+          }
+        : {}),
       status:    'RUNNING',
       pid:       null,
       startedAt: new Date(),
@@ -176,6 +224,9 @@ export class InnerBrainPool {
         tempDir,
         cmd:     cmd.join(' '),
         goal:    goal.slice(0, 80),
+        ...(gitMeta
+          ? { gitWorktree: true, evolveBranch: gitMeta.evolveBranch, mainBranch: gitMeta.mainBranch }
+          : { gitWorktree: false }),
       },
     });
 
@@ -308,6 +359,55 @@ export class InnerBrainPool {
     const ts   = Date.now().toString(36);
     const rand = Math.random().toString(36).slice(2, 6);
     return `ib-${ts}-${rand}`;
+  }
+
+  /**
+   * 若配置了 gitRepoRoot，创建 worktree 并返回路径与分支元数据；失败抛错。
+   * 未配置时返回 null。
+   */
+  private tryCreateGitWorktree(instanceId: string): {
+    workDir:       string;
+    gitRepoRoot:   string;
+    evolveBranch:  string;
+    mainBranch:    string;
+  } | null {
+    const root = this.resolvedGitRepoRoot;
+    if (!root) return null;
+
+    if (!isGitRepo(root)) {
+      throw new Error(`inner-brain-pool: gitRepoRoot 不是 Git 仓库：${root}`);
+    }
+
+    const mainBranch  = resolveMainBranch(root);
+    const startPoint  = resolveWorktreeStartPoint(root, mainBranch);
+    const shortHash   = crypto.createHash('sha256').update(root).digest('hex').slice(0, 8);
+    const workDir     = path.join(globalTmpDir(), 'kuroneko-repo-wt', shortHash, instanceId);
+
+    let evolveBranch = `evolve/${instanceId}`;
+    let suffix       = 0;
+    while (branchExists(root, evolveBranch)) {
+      suffix += 1;
+      evolveBranch = `evolve/${instanceId}-${suffix}`;
+    }
+
+    const parent = path.dirname(workDir);
+    fs.mkdirSync(parent, { recursive: true });
+
+    const add = worktreeAdd(root, workDir, evolveBranch, startPoint);
+    if (!add.ok) {
+      this.opts.logger.error('inner-brain-pool', {
+        event: 'worktree.add_failed',
+        data: { instanceId, root, workDir, evolveBranch, startPoint, err: add.err },
+      });
+      throw new Error(`git worktree add 失败：${add.err}`);
+    }
+
+    this.opts.logger.info('inner-brain-pool', {
+      event: 'worktree.created',
+      data: { instanceId, root, workDir, evolveBranch, startPoint, mainBranch },
+    });
+
+    return { workDir, gitRepoRoot: root, evolveBranch, mainBranch };
   }
 }
 

@@ -1,117 +1,93 @@
-# 自演化（Self-Evolution）协议
+# 自演化（Self-Evolution）协议 — Git Worktree 模型
 
-**版本**：1.0  
+**版本**：2.0  
 **日期**：2026-03-05  
+**变更**：弃用「单工作区 begin/reset」为默认路径；**多内脑并行**时每实例使用 **独立 worktree + 独立分支**，合并阶段再并入主分支（`main` / `master`）。
 
 ---
 
-## 1. 名称与目的
+## 1. 目标
 
-在 **Git 仓库根目录** 下，为「内脑 / 人类 / CI」提供**可串行、可回滚**的代码变更事务：
-
-- **begin**：记录基准提交；可选在脏工作区时自动 `stash`。
-- **verify**：运行约定命令（默认 `npm run build`），**不改变** Git 状态机状态（仅产生通过/失败）。
-- **commit**：将当前变更提交为一次 Git commit，并结束事务。
-- **rollback**：`git reset --hard` 到基准提交，并尝试 `stash pop`（若 begin 时曾 stash）。
-
-回滚语义以 **Git 对象（commit SHA）** 为准，不依赖历史 `git diff` 文件的反向应用。
+- 多个内脑可同时各自改代码，**互不抢占**同一 Git 工作树。
+- 每个实例：`git worktree add` + 新分支 `evolve/<instanceId>`（或带后缀保证唯一）。
+- 开发在 **`<tmp>/kuroneko-repo-wt/<hash>/<instanceId>/`**（或等价路径）完成；提交只增加该分支上的 commit。
+- **合并**：在主工作树（仓库根）执行 `checkout <主分支>` + `merge evolve/<instanceId>`。
+- **放弃**：`git worktree remove` + 删除未合并分支（`branch -D`）。
 
 ---
 
 ## 2. 参与方
 
-| 角色 | 约束 |
+| 角色 | 职责 |
 |------|------|
-| **生产者** | `kuroneko-evolve` CLI、未来内脑工具（调用同一 `EvolutionGate` API） |
-| **消费者** | Git 工作区、npm/测试脚本 |
-| **互斥** | 同一 `repoRoot` 同时仅允许**一个**进行中的事务（文件锁） |
+| **InnerBrainPool** | 若配置 `gitRepoRoot`，在 `launch()` 时创建 worktree，**内脑 `--dir` 指向 worktree 路径** |
+| **内脑进程** | 在 worktree 内正常编辑、`shell_exec` 下 `git commit`（已在目标分支上） |
+| **外脑** | 不调用 evolve 工具；仅派发内脑任务。合并/验证由人工或 `kuroneko-evolve` 等其它入口完成（实现可参考 `src/outer-brain/tools/evolution-ob-tools.ts`，默认不挂到外脑工具列表） |
+| **人类** | 配置 `gitRepoRoot`、处理合并冲突、必要时 `git push` |
 
 ---
 
-## 3. 数据格式
+## 3. 数据与路径
 
-### 3.1 目录布局（位于 `<repoRoot>/.self-evolution/`）
+| 项 | 说明 |
+|----|------|
+| `gitRepoRoot` | 主克隆根目录（须为已有 `.git` 的工作副本根） |
+| `worktreePath` | `$OPENKURONEKO_TMP/kuroneko-repo-wt/<repoShortHash>/<instanceId>/` |
+| `evolveBranch` | 如 `evolve/ib-m1abc-xyz` |
+| `mainBranch` | 由 `origin/HEAD` 或存在性探测得到 `main` 或 `master` |
 
-| 路径 | 说明 |
-|------|------|
-| `state.json` | 当前状态机快照（JSON，UTF-8） |
-| `lock` | 单事务锁：内容为持有进程 PID（文本） |
-| `logs/YYYY-MM-DD.jsonl` | 结构化日志（Logger 模块，与全局日志 schema 一致） |
-
-### 3.2 `state.json`（version 1）
-
-```json
-{
-  "version": 1,
-  "status": "idle | changing",
-  "base_sha": null,
-  "stashed": false,
-  "started_at": null
-}
-```
-
-- **`idle`**：`base_sha`、`started_at` 为 `null`，`stashed` 为 `false`。
-- **`changing`**：`base_sha` 为 begin 时 `git rev-parse HEAD`；`stashed` 表示 begin 时是否执行了 `git stash push -u`；`started_at` 为 ISO8601。
-
-### 3.3 锁文件 `lock`
-
-- 单行 ASCII 数字：当前持有锁的 PID。
-- **Stale 锁**：若 PID 不存在，下一调用方可删除 `lock` 后获取锁。
-- **同进程重入**：若锁内 PID 等于当前进程，视为已持有，直接成功（便于单进程内多次调用 `tryAcquireLock`）。
+实例记录（进程池）须持久化：`gitWorktreePath`、`gitEvolveBranch`、`gitRepoRoot`（或可从池配置推导）。
 
 ---
 
-## 4. 语义约定
+## 4. 流程
 
-### 4.1 begin
+### 4.1 启动实例（配置了 gitRepoRoot）
 
-1. 若 `state.status` 已为 `changing` → **拒绝**（须先 `rollback` 或 `commit`）。
-2. **短暂获取锁**（与并发 `begin` 互斥）；校验目录为 Git 仓库（`git rev-parse --git-dir`）。
-3. 记录 `base_sha = HEAD`。
-4. 若工作区脏：
-   - `allowDirty=false`（默认）→ **失败**，释放锁。
-   - `allowDirty=true` → `git stash push -u -m "openkuroneko-evolution-begin-<ISO8601>"`，`stashed=true`。
-5. 写入 `state.json`：`status=changing`，然后**释放锁**（允许多进程 CLI：`begin` 与后续 `commit` 为不同进程；事务边界由 `state.json` 表达）。
+1. 并发数仍受 `maxConcurrent` 限制。
+2. `git worktree add <worktreePath> -b <evolveBranch> <startPoint>`，`startPoint` 默认主分支 `HEAD`。
+3. `workDir = worktreePath`，`tempDir = deriveAgentId(workDir)`（与现逻辑一致）。
+4. 写入 goal、status、技能种子等到 **worktree** 下（`.brain` 在 worktree 内）。
 
-### 4.2 verify
+### 4.2 内脑开发
 
-- 在 `repoRoot` 下执行配置命令（默认 `npm run build`），超时可选（CLI 默认 10 分钟）。
-- **不修改** `state.json`（可与 `changing` 或 `idle` 调用；推荐仅在 `changing` 下使用）。
+- 所有文件操作相对于 **worktree**；`git commit` 只影响 **evolveBranch**。
 
-### 4.3 commit
+### 4.3 验证（可选）
 
-1. 获取锁；仅当 `status=changing`，否则拒绝并释放锁。
-2. `git add -A` + `git commit -m "<message>"`（需已配置 `user.name` / `user.email`）。
-3. 成功则重置为 `idle` 并释放锁；失败则锁仍持有，由调用方 `rollback` 或修复后重试。
+- 外脑 `evolution_worktree_verify`：在 `worktreePath` 下执行 `npm run build`（或可配置命令）。
 
-### 4.4 rollback
+### 4.4 合并
 
-1. 获取锁；仅当 `status=changing`，否则拒绝并释放锁。
-2. `git reset --hard <base_sha>`。
-3. 若 `stashed`：`git stash pop`；若冲突或失败 → **warn 日志**，不自动恢复（需人工处理 stash）。
-4. 重置 `idle`、释放锁。
+1. 在主工作树 `gitRepoRoot`：`git checkout <mainBranch>`，`git merge --no-ff` 或 `--ff`（实现可选）`evolveBranch`。
+2. 成功后可：`git worktree remove <worktreePath>`，`git branch -d evolveBranch`（已合并）。
+
+### 4.5 放弃
+
+1. `git worktree remove --force <worktreePath>`。
+2. `git branch -D <evolveBranch>`（未合并则强删）。
 
 ---
 
-## 5. 错误行为
+## 5. 错误与边界
 
 | 情况 | 行为 |
 |------|------|
-| 非 Git 仓库 | begin 失败，不写 changing |
-| 脏工作区且未 `allow-dirty` | begin 失败 |
-| 无进行中事务时 commit/rollback | 失败 |
-| verify 命令非零退出码 | 返回失败；不自动 rollback |
-| commit 无变更可提交 | git commit 失败；状态仍为 changing |
+| 非 Git 根 / worktree add 失败 | `launch` 失败，不启动子进程 |
+| 分支已存在 | 实现应加后缀重试分支名 |
+| 合并冲突 | merge 命令非零退出；由人类解决；协议不自动强推 |
+| 未配置 gitRepoRoot | 回退为 **v1 行为**：`tasks/<id>/` 在 ob-agent 下，**不使用** worktree |
 
 ---
 
-## 6. 安全说明
+## 6. 与 v1（单树 begin/rollback）的关系
 
-- `verify` 的命令字符串**仅应由受信方传入**（CLI 操作员或硬编码工具）；禁止将任意用户聊天内容直接拼进 shell。
-- 本协议**不**执行 `tar -C /` 或系统根目录写操作。
+- **`kuroneko-evolve` 旧子命令**（`begin`/`verify`/`commit`/`rollback`）仍可作**人工单线程**辅助；与 worktree 模型**独立**。
+- **外脑**不向 LLM 暴露 evolve 类工具；**内脑**在 worktree 上开发与提交；合并进主分支由人工或其它流程处理。
 
 ---
 
-## 7. 与内脑工具的关系（后续）
+## 7. 安全
 
-内脑可暴露 `evolution_begin` / `evolution_verify` / `evolution_commit` / `evolution_rollback`，参数映射本协议；实现须调用 `src/evolution` 中 `EvolutionGate`，并写入 `module: evolution` 的 Logger 事件。
+- `verify` 的命令字符串仅来自受信配置/工具参数。
+- `merge`/`abort` 仅作用于池内登记的 `instance_id` 对应路径，禁止任意路径参数。

@@ -53,6 +53,14 @@ export function createListInnerBrainsTool(pool: InnerBrainPool): ObTool {
           blocked:     runtimeStatus?.['blocked'] ?? null,
           blockReason: runtimeStatus?.['block_reason'] ?? null,
           milestones,
+          ...(r.gitEvolveBranch
+            ? {
+                git_worktree:    true,
+                work_dir:        r.workDir,
+                git_evolve_branch: r.gitEvolveBranch,
+                git_main_branch:   r.gitMainBranch ?? null,
+              }
+            : { git_worktree: false }),
         };
       });
 

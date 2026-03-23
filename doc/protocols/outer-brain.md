@@ -249,6 +249,7 @@ alice 回复 → 写 directives: {"type":"feedback","content":"[BLOCK解封] 用
 | `search_thread` | 搜索对话历史 | 所有已注册用户 |
 | `get_time` | 获取当前时间 | 所有已注册用户 |
 | `read_file` | 受限读文件：仅 `scope=ob`（外脑工作目录下）或 `inner_temp` / `inner_work`（须有效 `instance_id`，路径不得含 `..`）；用于读内脑 `output`/`status`/`input`/日志等 | 所有已注册用户 |
+**自演化 / Git**：外脑**不**注册 `evolution_*` 或 `evolution_worktree_*` 工具；仓库级 merge、验证流水线等由人工或其它 CLI 完成。内脑在其工作目录（可能为独立 Git worktree，见 `doc/protocols/self-evolution.md`）内可自行 `git commit` 等。进程池是否在 tmp 下为每实例创建 worktree，由 `kuroneko-ob` 启动时的 `OPENKURONEKO_EVOLUTION_REPO` / `OPENKURONEKO_EVOLUTION_OFF` 与 `<obDir>/..` 是否含 `.git` 决定（与 `InnerBrainPool.gitRepoRoot` 一致），**不**向外脑 LLM 暴露 git 工具。
 
 **禁止工具（内脑级）**：`shell_exec`、**任意路径**的 `read_file` / `write_file`、`web_search` 等内脑全量工具集。外脑的 `read_file` 为单独实现，仅能解析到上述三个根目录之一，且有字节上限。
 

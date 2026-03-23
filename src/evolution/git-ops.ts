@@ -75,3 +75,70 @@ export function commit(cwd: string, message: string): { ok: true; sha: string } 
   if (!sha) return { ok: false, err: 'commit 后无法解析 HEAD' };
   return { ok: true, sha };
 }
+
+/** `git worktree add -b <branch> <path> <start>` — 在 repoRoot 主仓库注册新 worktree */
+export function worktreeAdd(
+  repoRoot: string,
+  absWorktreePath: string,
+  newBranch: string,
+  startPoint: string,
+): { ok: true } | { ok: false; err: string } {
+  const r = gitExec(repoRoot, ['worktree', 'add', '-b', newBranch, absWorktreePath, startPoint]);
+  return r.ok ? { ok: true } : { ok: false, err: r.err };
+}
+
+/** `git worktree remove [--force] <path>` — path 一般为绝对路径 */
+export function worktreeRemove(
+  repoRoot: string,
+  absWorktreePath: string,
+  force: boolean,
+): { ok: true } | { ok: false; err: string } {
+  const args = ['worktree', 'remove', ...(force ? ['--force'] : []), absWorktreePath];
+  const r = gitExec(repoRoot, args);
+  return r.ok ? { ok: true } : { ok: false, err: r.err };
+}
+
+export function branchExists(repoRoot: string, branch: string): boolean {
+  const r = gitExec(repoRoot, ['rev-parse', '--verify', branch]);
+  return r.ok;
+}
+
+/** 解析主集成分支：origin/HEAD → main / master 回退 */
+export function resolveMainBranch(repoRoot: string): string {
+  const sym = gitExec(repoRoot, ['symbolic-ref', 'refs/remotes/origin/HEAD']);
+  if (sym.ok) {
+    const m = sym.out.match(/refs\/remotes\/origin\/(.+)/);
+    const b = m?.[1]?.trim();
+    if (b) return b;
+  }
+  for (const b of ['main', 'master']) {
+    if (branchExists(repoRoot, b)) return b;
+  }
+  return 'main';
+}
+
+/** worktree add 的起点：优先本地分支，否则 origin/<mainBranch> */
+export function resolveWorktreeStartPoint(repoRoot: string, mainBranch: string): string {
+  if (branchExists(repoRoot, mainBranch)) return mainBranch;
+  const remote = `origin/${mainBranch}`;
+  if (branchExists(repoRoot, remote)) return remote;
+  return mainBranch;
+}
+
+/** 在主工作树 checkout mainBranch 后 merge featureBranch */
+export function mergeFeatureBranch(
+  repoRoot: string,
+  mainBranch: string,
+  featureBranch: string,
+): { ok: true } | { ok: false; err: string } {
+  let r = gitExec(repoRoot, ['checkout', mainBranch]);
+  if (!r.ok) return { ok: false, err: `checkout ${mainBranch}: ${r.err}` };
+  r = gitExec(repoRoot, ['merge', '--no-edit', featureBranch]);
+  return r.ok ? { ok: true } : { ok: false, err: r.err };
+}
+
+export function branchDelete(repoRoot: string, branch: string, force: boolean): { ok: true } | { ok: false; err: string } {
+  const flag = force ? '-D' : '-d';
+  const r = gitExec(repoRoot, ['branch', flag, branch]);
+  return r.ok ? { ok: true } : { ok: false, err: r.err };
+}

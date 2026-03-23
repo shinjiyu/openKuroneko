@@ -11,7 +11,9 @@
  *               [--escalation-wait-ms <ms>]
  *
  * 多实例内脑：
- *   每次 set_goal 都会在 <obDir>/tasks/<instanceId>/ 创建独立工作目录并启动新内脑进程。
+ *   每次 set_goal 会启动新内脑进程；工作目录默认 <obDir>/tasks/<instanceId>/。
+ *   若启用自演化 Git 根（见下方环境变量，且 <obDir>/.. 含 .git），则每实例在全局 tmp 下
+ *   kuroneko-repo-wt/<hash>/<instanceId>/ 创建独立 git worktree + evolve 分支（协议 self-evolution v2）。
  *   内脑命令通过 --inner-cmd 指定（其中 --dir 参数会被池自动替换为实例目录）。
  *
  * 示例：
@@ -31,6 +33,7 @@ import { createLogger } from '../logger/index.js';
 import { createOpenAIAdapter, createGLMAdapter } from '../adapter/index.js';
 import { createFilesystemStore } from '../archive/index.js';
 import { createOuterBrain, InnerBrainPool } from '../outer-brain/index.js';
+import { resolveEvolutionRepoRoot } from '../outer-brain/tools/evolution-ob-tools.js';
 import { mergeWorkDirSkillsToAgentPool } from '../outer-brain/agent-pool.js';
 import { resolveIdentity } from '../identity/index.js';
 import { loadConfig } from '../config/index.js';
@@ -157,6 +160,13 @@ async function main() {
     logger.info('cli', { event: 'fast-model.ready', data: { model: fastModelName } });
   }
 
+  const evolutionExplicit =
+    process.env['OPENKURONEKO_EVOLUTION_OFF'] === '1' || process.env['OPENKURONEKO_EVOLUTION_OFF'] === 'true'
+      ? null
+      : process.env['OPENKURONEKO_EVOLUTION_REPO']?.trim() || undefined;
+
+  const evolutionRepoForPool = resolveEvolutionRepoRoot(obDir, evolutionExplicit);
+
   // ── 内脑进程池 ───────────────────────────────────────────────────────────
 
   let innerBrainPool: InnerBrainPool | undefined;
@@ -169,6 +179,7 @@ async function main() {
       launchCommandTemplate,
       maxConcurrent,
       logger,
+      ...(evolutionRepoForPool ? { gitRepoRoot: evolutionRepoForPool } : {}),
       onInstanceExit: (inst) => {
         logger.info('cli', {
           event: 'inner-brain.exit',
@@ -180,7 +191,12 @@ async function main() {
 
     logger.info('cli', {
       event: 'inner-brain-pool.ready',
-      data: { cmd: opts.innerCmd, maxConcurrent },
+      data: {
+        cmd:          opts.innerCmd,
+        maxConcurrent,
+        gitWorktree:  !!evolutionRepoForPool,
+        ...(evolutionRepoForPool ? { gitRepoRoot: evolutionRepoForPool } : {}),
+      },
     });
   }
 
